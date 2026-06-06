@@ -30,7 +30,7 @@ class CookieManager:
             cookie_file: Cookie文件路径
         """
         self.cookie_file = Path(cookie_file)
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('cookie_manager')
         
         # 网易云音乐相关的重要Cookie字段
         self.important_cookies = {

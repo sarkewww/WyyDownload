@@ -205,7 +205,7 @@ class MusicDownloader:
     
     def download_music_file(self, music_id: int, quality: str = "standard",
                             progress_callback: Callable[[int, int, int], None] = None) -> DownloadResult:
-        """下载音乐文件到本地
+        """下载音乐文件到本地（支持断点续传）
         
         Args:
             music_id: 音乐ID
@@ -218,6 +218,7 @@ class MusicDownloader:
             safe_filename = self._sanitize_filename(filename)
             file_ext = self._determine_file_extension(music_info.download_url)
             file_path = self.download_dir / f"{safe_filename}{file_ext}"
+            part_path = file_path.with_suffix(file_path.suffix + '.part')
             
             if file_path.exists():
                 if progress_callback:
@@ -226,15 +227,32 @@ class MusicDownloader:
                 return DownloadResult(success=True, file_path=str(file_path),
                                       file_size=file_path.stat().st_size, music_info=music_info)
             
-            response = requests.get(music_info.download_url, stream=True, timeout=60)
+            # 断点续传: 检查 .part 文件
+            downloaded = 0
+            if part_path.exists():
+                downloaded = part_path.stat().st_size
+            
+            headers = {}
+            if downloaded > 0:
+                headers['Range'] = f'bytes={downloaded}-'
+            
+            response = requests.get(music_info.download_url, stream=True, timeout=60, headers=headers)
+            total_size = int(response.headers.get('content-length', music_info.file_size))
+            if downloaded > 0:
+                total_size += downloaded  # Range 响应只有剩余部分
+            
+            # 206 表示服务器支持续传, 200 表示从头开始
+            if response.status_code == 200 and downloaded > 0:
+                downloaded = 0  # 服务器不支持续传, 从头下载
+                part_path.unlink(missing_ok=True)
+            
             response.raise_for_status()
+            mode = 'ab' if downloaded > 0 else 'wb'
             
             if progress_callback:
-                total_size = int(response.headers.get('content-length', music_info.file_size))
-                downloaded = 0
                 start_time = time.time()
                 last_time = start_time
-                with open(file_path, 'wb') as f:
+                with open(part_path, mode) as f:
                     for chunk in response.iter_content(chunk_size=65536):
                         if chunk:
                             f.write(chunk)
@@ -250,10 +268,13 @@ class MusicDownloader:
                         speed = int(downloaded / elapsed) if elapsed > 0 else 0
                         progress_callback(downloaded, total_size, speed)
             else:
-                with open(file_path, 'wb') as f:
+                with open(part_path, mode) as f:
                     for chunk in response.iter_content(chunk_size=65536):
                         if chunk:
                             f.write(chunk)
+            
+            # 下载完成, 重命名 .part -> 正式文件
+            part_path.rename(file_path)
             
             self._write_music_tags(file_path, music_info)
             return DownloadResult(success=True, file_path=str(file_path),
