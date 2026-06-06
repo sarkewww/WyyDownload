@@ -7,26 +7,11 @@
 - 自动过期处理
 """
 
-import os
-import json
 import time
 from typing import Dict, Optional, List, Tuple, Any
 from pathlib import Path
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
-
-
-@dataclass
-class CookieInfo:
-    """Cookie信息数据类"""
-    name: str
-    value: str
-    domain: str = ""
-    path: str = "/"
-    expires: Optional[int] = None
-    secure: bool = False
-    http_only: bool = False
 
 
 class CookieException(Exception):
@@ -298,148 +283,7 @@ class CookieManager:
                 'file_exists': False,
                 'is_valid': False
             }
-    
-    def backup_cookie(self, backup_suffix: str = None) -> str:
-        """备份Cookie文件
-        
-        Args:
-            backup_suffix: 备份文件后缀，默认使用时间戳
-            
-        Returns:
-            备份文件路径
-            
-        Raises:
-            CookieException: 备份失败时抛出
-        """
-        try:
-            if not self.cookie_file.exists():
-                raise CookieException("Cookie文件不存在，无法备份")
-            
-            if backup_suffix is None:
-                backup_suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            backup_path = self.cookie_file.with_suffix(f".{backup_suffix}.bak")
-            
-            # 复制文件内容
-            content = self.cookie_file.read_text(encoding='utf-8')
-            backup_path.write_text(content, encoding='utf-8')
-            
-            self.logger.info(f"Cookie备份成功: {backup_path}")
-            return str(backup_path)
-            
-        except Exception as e:
-            raise CookieException(f"备份Cookie文件失败: {e}")
-    
-    def restore_cookie(self, backup_path: str) -> bool:
-        """从备份恢复Cookie
-        
-        Args:
-            backup_path: 备份文件路径
-            
-        Returns:
-            是否恢复成功
-            
-        Raises:
-            CookieException: 恢复失败时抛出
-        """
-        try:
-            backup_file = Path(backup_path)
-            if not backup_file.exists():
-                raise CookieException(f"备份文件不存在: {backup_path}")
-            
-            # 读取备份内容
-            backup_content = backup_file.read_text(encoding='utf-8')
-            
-            # 验证备份内容
-            if not self.validate_cookie_format(backup_content):
-                raise CookieException("备份文件中的Cookie格式无效")
-            
-            # 写入当前Cookie文件
-            self.write_cookie(backup_content)
-            
-            self.logger.info(f"从备份恢复Cookie成功: {backup_path}")
-            return True
-            
-        except Exception as e:
-            raise CookieException(f"恢复Cookie失败: {e}")
-    
-    def clear_cookie(self) -> bool:
-        """清空Cookie文件
-        
-        Returns:
-            是否清空成功
-        """
-        try:
-            if self.cookie_file.exists():
-                self.cookie_file.write_text("", encoding='utf-8')
-                self.logger.info("Cookie文件已清空")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"清空Cookie文件失败: {e}")
-            return False
-    
-    def update_cookie(self, new_cookies: Dict[str, str]) -> bool:
-        """更新Cookie
-        
-        Args:
-            new_cookies: 新的Cookie字典
-            
-        Returns:
-            是否更新成功
-        """
-        try:
-            if not new_cookies:
-                raise CookieException("新Cookie不能为空")
-            
-            # 读取现有Cookie
-            existing_cookies = self.parse_cookies()
-            
-            # 合并Cookie
-            existing_cookies.update(new_cookies)
-            
-            # 转换为Cookie字符串
-            cookie_string = '; '.join(f"{k}={v}" for k, v in existing_cookies.items())
-            
-            # 写入文件
-            return self.write_cookie(cookie_string)
-            
-        except Exception as e:
-            self.logger.error(f"更新Cookie失败: {e}")
-            return False
-    
-    def get_cookie_for_request(self) -> Dict[str, str]:
-        """获取用于HTTP请求的Cookie字典
-        
-        Returns:
-            适用于requests库的Cookie字典
-        """
-        try:
-            cookies = self.parse_cookies()
-            
-            # 过滤掉空值
-            filtered_cookies = {k: v for k, v in cookies.items() if k and v}
-            
-            return filtered_cookies
-            
-        except Exception as e:
-            self.logger.error(f"获取请求Cookie失败: {e}")
-            return {}
-    
-    def format_cookie_string(self, cookies: Dict[str, str]) -> str:
-        """将Cookie字典格式化为字符串
-        
-        Args:
-            cookies: Cookie字典
-            
-        Returns:
-            Cookie字符串
-        """
-        if not cookies:
-            return ""
-        
-        return '; '.join(f"{k}={v}" for k, v in cookies.items() if k and v)
-    
+
     def __str__(self) -> str:
         """字符串表示"""
         info = self.get_cookie_info()

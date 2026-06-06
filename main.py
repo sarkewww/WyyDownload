@@ -30,12 +30,12 @@ from flask import Flask, request, send_file, render_template, Response, make_res
 
 try:
     from music_api import (
-        NeteaseAPI, APIException, QualityLevel, QRLoginManager,
+        NeteaseAPI, APIException, QRLoginManager,
         url_v1, name_v1, lyric_v1, search_music, 
         playlist_detail, album_detail, batch_song_urls
     )
     from cookie_manager import CookieManager, CookieException
-    from music_downloader import MusicDownloader, DownloadException, AudioFormat
+    from music_downloader import MusicDownloader, DownloadException
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有依赖模块存在且可用")
@@ -143,7 +143,6 @@ class MusicAPIService:
         try:
             # 处理短链接
             if '163cn.tv' in id_or_url:
-                import requests
                 response = requests.get(id_or_url, allow_redirects=False, timeout=10)
                 id_or_url = response.headers.get('Location', id_or_url)
             
@@ -357,6 +356,9 @@ class BatchTaskManager:
                 ps[idx] = total_size
                 tsk['_pre_sizes'] = ps
                 tsk['total_bytes'] = max(tsk['total_bytes'], sum(ps.values()))
+                fp = tsk.get('_file_progress', {})
+                fp[idx] = {'name': f"{track['artists']} - {track['name']}", 'downloaded': downloaded, 'total': total_size, 'status': 'downloading'}
+                tsk['_file_progress'] = fp
 
         try:
             result = downloader.download_music_file(sid, level, progress_callback=progress_cb)
@@ -371,6 +373,8 @@ class BatchTaskManager:
                         tsk['success'] += 1
                         tsk['completed'] += 1
                         tsk['files'].append({'name': f"{safe_name}{src.suffix}", 'size': fs})
+                        fp = tsk.get('_file_progress', {})
+                        if idx in fp: fp[idx]['status'] = 'done'
                 return True, result
             else:
                 err_msg = result.error_message or '未知错误'
@@ -380,6 +384,8 @@ class BatchTaskManager:
                         tsk['failed'] += 1
                         tsk['completed'] += 1
                         tsk['errors'].append({'index': idx + 1, 'name': track['name'], 'reason': err_msg})
+                        fp = tsk.get('_file_progress', {})
+                        if idx in fp: fp[idx]['status'] = 'failed'
                 return False, result
         except Exception as e:
             with self.lock:
@@ -410,6 +416,7 @@ class BatchTaskManager:
                 'avg_speed_formatted': _format_speed(avg_speed),
                 'eta_formatted': _format_eta(eta),
                 'percent': round(task['completed'] / task['total'] * 100, 1) if task['total'] > 0 else 0,
+                'files_progress': list(task.get('_file_progress', {}).values()),
             }
 
     def get_result(self, task_id: str) -> Optional[tuple]:
@@ -424,6 +431,31 @@ class BatchTaskManager:
 
 batch_task_mgr = BatchTaskManager(api_service.downloader)
 qr_manager = QRLoginManager()
+
+VALID_LEVELS = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster']
+ILLEGAL_CHARS = r'<>:"/\|?*'
+
+
+def safe_filename(name: str) -> str:
+    return ''.join(c for c in (name or 'file') if c not in ILLEGAL_CHARS)
+
+
+def make_zip_response(files_dir: Path, zip_name: str) -> Tuple[BytesIO, str]:
+    zip_buf = BytesIO()
+    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(files_dir.iterdir()):
+            zf.write(str(f), f.name)
+    zip_buf.seek(0)
+    return zip_buf, safe_filename(zip_name) + '.zip'
+
+
+def get_playlist_or_fail(playlist_id):
+    """获取歌单信息，失败时返回错误响应"""
+    cookies = api_service._get_cookies()
+    playlist = playlist_detail(playlist_id, cookies)
+    if not playlist or not playlist.get('tracks'):
+        return None, APIResponse.error("获取歌单详情失败或歌单为空", 404)
+    return playlist, None
 
 
 @app.route('/qr-login/start', methods=['POST'])
@@ -589,7 +621,7 @@ def get_song_info():
         music_id = api_service._extract_music_id(song_ids or url)
         
         # 验证音质参数
-        valid_levels = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster']
+        valid_levels = VALID_LEVELS
         if level not in valid_levels:
             return APIResponse.error(f"无效的音质参数，支持: {', '.join(valid_levels)}")
         
@@ -696,7 +728,7 @@ def search_music_api():
             limit = 100
         
         cookies = api_service._get_cookies()
-        result = search_music(keyword, cookies, limit)
+        result = search_music(keyword, cookies, limit, int(search_type))
         
         # search_music返回的是歌曲列表，需要包装成前端期望的格式
         if result:
@@ -754,7 +786,7 @@ def batch_get_playlist_urls():
         validation_error = api_service._validate_request_params({'playlist_id': playlist_id})
         if validation_error:
             return validation_error
-        valid_levels = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster']
+        valid_levels = VALID_LEVELS
         if level not in valid_levels:
             return APIResponse.error(f"无效的音质参数，支持: {', '.join(valid_levels)}")
         cookies = api_service._get_cookies()
@@ -823,7 +855,7 @@ def batch_download_start():
         validation_error = api_service._validate_request_params({'playlist_id': playlist_id})
         if validation_error:
             return validation_error
-        valid_levels = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster']
+        valid_levels = VALID_LEVELS
         if level not in valid_levels:
             return APIResponse.error(f"无效的音质参数，支持: {', '.join(valid_levels)}")
         cookies = api_service._get_cookies()
@@ -952,13 +984,7 @@ def batch_download_lyric():
                     pass
             if success_count == 0:
                 return APIResponse.error("所有歌词获取失败", 500)
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for f in sorted(tmp_path.iterdir()):
-                    zf.write(str(f), f.name)
-            zip_buffer.seek(0)
-            safe_pl_name = ''.join(c for c in (playlist.get('name', 'playlist')) if c not in r'<>:"/\|?*')
-            zip_filename = f"{safe_pl_name}_lyrics.zip"
+            zip_buffer, zip_filename = make_zip_response(tmp_path, playlist.get('name', 'playlist') + '_lyrics')
             response = send_file(zip_buffer, as_attachment=True, download_name=zip_filename, mimetype='application/zip')
             response.headers['X-Lyric-Count'] = str(success_count)
             response.headers['X-Total-Count'] = str(total)
@@ -1037,16 +1063,7 @@ def batch_download_cover():
 
             if success_count == 0:
                 return APIResponse.error("所有封面获取失败", 500)
-
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for f in sorted(tmp_path.iterdir()):
-                    zf.write(str(f), f.name)
-            zip_buffer.seek(0)
-
-            safe_pl_name = ''.join(c for c in (playlist.get('name', 'playlist')) if c not in r'<>:"/\|?*')
-            zip_filename = f"{safe_pl_name}_covers.zip"
-
+            zip_buffer, zip_filename = make_zip_response(tmp_path, playlist.get('name', 'playlist') + '_covers')
             response = send_file(zip_buffer, as_attachment=True, download_name=zip_filename, mimetype='application/zip')
             response.headers['X-Cover-Count'] = str(success_count)
             response.headers['X-Total-Count'] = str(total)
@@ -1104,7 +1121,7 @@ def download_music_api():
             return validation_error
         
         # 验证音质参数
-        valid_qualities = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster']
+        valid_qualities = VALID_LEVELS
         if quality not in valid_qualities:
             return APIResponse.error(f"无效的音质参数，支持: {', '.join(valid_qualities)}")
         
