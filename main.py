@@ -301,6 +301,7 @@ class BatchTaskManager:
         if not task:
             return
         level = task['level']
+        task['_cancelled'] = False
         downloader = self.downloader
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -312,11 +313,13 @@ class BatchTaskManager:
                     safe_name = ''.join(c for c in safe_name if c not in r'<>:"/\|?*')
                     future = dl_executor.submit(
                         self._download_one, task_id, i, track, sid, safe_name, level, tmp_path, downloader)
-                    futures.append(future)
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception:
+                futures.append(future)
+            for future in as_completed(futures):
+                if task.get('_cancelled'):
+                    break
+                try:
+                    future.result()
+                except Exception:
                         pass
             with self.lock:
                 t = self.tasks.get(task_id)
@@ -427,6 +430,14 @@ class BatchTaskManager:
 
     def cleanup(self, task_id: str):
         self.tasks.pop(task_id, None)
+
+    def cancel(self, task_id: str) -> bool:
+        task = self.tasks.get(task_id)
+        if task and task['status'] == 'running':
+            task['_cancelled'] = True
+            task['status'] = 'cancelled'
+            return True
+        return False
 
 
 batch_task_mgr = BatchTaskManager(api_service.downloader)
@@ -823,7 +834,8 @@ def batch_get_playlist_urls():
         for track in tracks:
             url_info = urls_result.get(track['id'])
             td = {'id': track['id'], 'name': track['name'], 'artists': track['artists'],
-                   'album': track['album'], 'picUrl': track['picUrl']}
+                   'album': track['album'], 'picUrl': track['picUrl'],
+                   'duration': track.get('duration', 0)}
             if url_info:
                 td.update(url_info)
             else:
@@ -908,6 +920,17 @@ def batch_download_result(task_id: str):
         return response
     except Exception as e:
         return APIResponse.error(f"获取结果失败: {str(e)}", 500)
+
+
+@app.route('/playlist/download/batch/cancel/<task_id>', methods=['POST'])
+def batch_download_cancel(task_id: str):
+    """取消批量下载任务"""
+    try:
+        if batch_task_mgr.cancel(task_id):
+            return APIResponse.success(None, "任务已取消")
+        return APIResponse.error("任务不存在或无法取消", 404)
+    except Exception as e:
+        return APIResponse.error(f"取消失败: {str(e)}", 500)
 
 
 @app.route('/lyric/download', methods=['GET', 'POST'])

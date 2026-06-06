@@ -421,7 +421,8 @@ class NeteaseAPI:
                         'name': song['name'],
                         'artists': '/'.join(artist['name'] for artist in song['ar']),
                         'album': song['al']['name'],
-                        'picUrl': song['al']['picUrl']
+                        'picUrl': song['al']['picUrl'],
+                        'duration': song.get('dt', 0),
                     })
             
             return info
