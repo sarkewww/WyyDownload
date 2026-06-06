@@ -339,25 +339,31 @@ class BatchTaskManager:
                         future.result()
                     except Exception:
                         pass
-            api_service.logger.info(f"[DL-TASK-{task_id}] all completed: {task.get('success')}/{task.get('total')}")
+            pl_name = task['playlist_info'].get('name', 'playlist')
+            pl_creator = task['playlist_info'].get('creator', '')
+            success_count = task.get('success', 0)
+            api_service.logger.info(f"[DL-TASK-{task_id}] all completed: {success_count}/{task.get('total')}")
+            zip_buffer = None
+            files_count = 0
+            zip_size = 0
+            if success_count > 0:
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    files_in_tmp = sorted(tmp_path.iterdir())
+                    files_count = len(files_in_tmp)
+                    for f in files_in_tmp:
+                        zf.write(str(f), f.name)
+                zip_buffer.seek(0)
+                zip_size = zip_buffer.getbuffer().nbytes
             with self.lock:
                 t = self.tasks.get(task_id)
                 if t is None:
                     return
-                if t['success'] > 0:
-                    zip_buffer = BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        files_in_tmp = sorted(tmp_path.iterdir())
-                        for f in files_in_tmp:
-                            zf.write(str(f), f.name)
-                    zip_buffer.seek(0)
-                    zip_data = zip_buffer.getvalue()
+                if success_count > 0:
                     t['zip_buffer'] = zip_buffer
-                    pl_name = t['playlist_info'].get('name', 'playlist')
-                    pl_creator = t['playlist_info'].get('creator', '')
                     t['zip_filename'] = safe_filename(f"{pl_name}-{pl_creator}").strip('-') + '.zip'
                     t['status'] = 'completed'
-                    api_service.logger.info(f"[DL-TASK-{task_id}] ZIP created: {len(files_in_tmp)} files, {len(zip_data)} bytes")
+                    api_service.logger.info(f"[DL-TASK-{task_id}] ZIP created: {files_count} files, {zip_size} bytes")
                 else:
                     t['status'] = 'failed'
 
@@ -427,9 +433,8 @@ class BatchTaskManager:
         with self.lock:
             self._cleanup_expired()
             task = self.tasks.get(task_id)
-        if not task:
-            return None
-        with self.lock:
+            if not task:
+                return None
             elapsed = time.time() - task['start_time']
             avg_speed = int(task['downloaded_bytes'] / elapsed) if elapsed > 0 else 0
             remaining_bytes = max(0, task['total_bytes'] - task['downloaded_bytes'])
@@ -449,21 +454,24 @@ class BatchTaskManager:
             }
 
     def get_result(self, task_id: str) -> Optional[tuple]:
-        task = self.tasks.get(task_id)
-        if not task or task['status'] != 'completed':
-            return None
-        return task.get('zip_buffer'), task.get('zip_filename'), task
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task or task['status'] != 'completed':
+                return None
+            return task.get('zip_buffer'), task.get('zip_filename'), task
 
     def cleanup(self, task_id: str):
-        self.tasks.pop(task_id, None)
+        with self.lock:
+            self.tasks.pop(task_id, None)
 
     def cancel(self, task_id: str) -> bool:
-        task = self.tasks.get(task_id)
-        if task and task['status'] == 'running':
-            task['_cancelled'] = True
-            task['status'] = 'cancelled'
-            return True
-        return False
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if task and task['status'] == 'running':
+                task['_cancelled'] = True
+                task['status'] = 'cancelled'
+                return True
+            return False
 
 
 batch_task_mgr = BatchTaskManager(api_service.downloader)
@@ -1233,8 +1241,9 @@ def album_batch_download_cover():
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir); success = 0
             for i, t in enumerate(tracks):
-                pic = (t.get('picUrl') or '').replace('http://', 'https://') + '?param=500y500'
+                pic = (t.get('picUrl') or '').replace('http://', 'https://')
                 if not pic: continue
+                pic = pic + '?param=500y500'
                 sn = safe_filename(f"{i+1:03d}. {t['artists']} - {t['name']}") + '.jpg'
                 try:
                     r = requests.get(pic, timeout=30, headers={'User-Agent': 'Mozilla/5.0'})
