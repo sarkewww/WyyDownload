@@ -10,9 +10,11 @@
 """
 
 import json
+import base64
 import urllib.parse
 import time
-from random import randrange
+import string
+from random import randrange, choices
 from typing import Dict, List, Optional, Tuple, Any
 from hashlib import md5
 from enum import Enum
@@ -48,6 +50,8 @@ class APIConstants:
     SEARCH_API = 'https://music.163.com/api/cloudsearch/pc'
     PLAYLIST_DETAIL_API = 'https://music.163.com/api/v6/playlist/detail'
     ALBUM_DETAIL_API = 'https://music.163.com/api/v1/album/'
+    USER_ACCOUNT_API = 'https://music.163.com/weapi/w/nuser/account/get'
+    VIP_LEVEL_API = 'https://interface.music.163.com/weapi/vipnewcenter/app/level/info'
     QR_UNIKEY_API = 'https://interface3.music.163.com/eapi/login/qrcode/unikey'
     QR_LOGIN_API = 'https://interface3.music.163.com/eapi/login/qrcode/client/login'
     
@@ -69,37 +73,66 @@ class APIConstants:
 
 class CryptoUtils:
     """加密工具类"""
-    
+
+    WEAPI_KEY = b'0CoJUm6Qyw8W8jud'
+    WEAPI_IV = b'0102030405060708'
+    RSA_PUB_KEY = '010001'
+    RSA_MODULUS = '00e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7b725152b3ab17a876aea8a5aa76d2e417629ec4ee341f56135fccf695280104e0312ecbda92557c93870114af6c9d05c4f7f0c3685b7a46bee255932575cce10b424d813cfe4875d3e82047b97ddef52741d546b8e289dc6935b3ece0462db0a22b8e7'
+   
     @staticmethod
     def hex_digest(data: bytes) -> str:
         """将字节数据转换为十六进制字符串"""
         return "".join([hex(d)[2:].zfill(2) for d in data])
-    
+   
     @staticmethod
     def hash_digest(text: str) -> bytes:
         """计算MD5哈希值"""
         return md5(text.encode("utf-8")).digest()
-    
+   
     @staticmethod
     def hash_hex_digest(text: str) -> str:
         """计算MD5哈希值并转换为十六进制字符串"""
         return CryptoUtils.hex_digest(CryptoUtils.hash_digest(text))
-    
+   
     @staticmethod
     def encrypt_params(url: str, payload: Dict[str, Any]) -> str:
-        """加密请求参数"""
+        """加密请求参数 (eapi)"""
         url_path = urllib.parse.urlparse(url).path.replace("/eapi/", "/api/")
         digest = CryptoUtils.hash_hex_digest(f"nobody{url_path}use{json.dumps(payload)}md5forencrypt")
         params = f"{url_path}-36cd479b6b5-{json.dumps(payload)}-36cd479b6b5-{digest}"
-        
-        # AES加密
+       
         padder = padding.PKCS7(algorithms.AES(APIConstants.AES_KEY).block_size).padder()
         padded_data = padder.update(params.encode()) + padder.finalize()
         cipher = Cipher(algorithms.AES(APIConstants.AES_KEY), modes.ECB())
         encryptor = cipher.encryptor()
         enc = encryptor.update(padded_data) + encryptor.finalize()
-        
+       
         return CryptoUtils.hex_digest(enc)
+
+    @staticmethod
+    def _aes_cbc_encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
+        padder = padding.PKCS7(128).padder()
+        padded = padder.update(data) + padder.finalize()
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+        encryptor = cipher.encryptor()
+        return encryptor.update(padded) + encryptor.finalize()
+
+    @staticmethod
+    def encrypt_weapi(payload: Dict[str, Any]) -> Tuple[str, str]:
+        """加密 weapi 请求参数, 返回 (params, encSecKey)"""
+        text = json.dumps(payload)
+        # 随机 16 字符作为第二层 key
+        sec_key = ''.join(choices(string.ascii_letters + string.digits, k=16))
+        # 第一层: 用固定 key 加密原始文本
+        enc1 = CryptoUtils._aes_cbc_encrypt(text.encode(), CryptoUtils.WEAPI_KEY, CryptoUtils.WEAPI_IV)
+        enc1_b64 = base64.b64encode(enc1)
+        # 第二层: 对 base64 结果用 sec_key 加密
+        enc2 = CryptoUtils._aes_cbc_encrypt(enc1_b64, sec_key.encode(), CryptoUtils.WEAPI_IV)
+        params = base64.b64encode(enc2).decode()
+        # RSA 加密 sec_key (倒序后模幂)
+        rs = int(sec_key[::-1].encode('utf-8').hex(), 16)
+        enc_sec_key = format(pow(rs, int(CryptoUtils.RSA_PUB_KEY, 16), int(CryptoUtils.RSA_MODULUS, 16)), 'x').zfill(256)
+        return params, enc_sec_key
 
 
 class HTTPClient:
@@ -131,15 +164,32 @@ class HTTPClient:
             'User-Agent': APIConstants.USER_AGENT,
             'Referer': APIConstants.REFERER,
         }
-        
+       
         request_cookies = APIConstants.DEFAULT_COOKIES.copy()
         request_cookies.update(cookies)
-        
+       
         try:
             response = requests.post(url, headers=headers, cookies=request_cookies, 
                                    data={"params": params}, timeout=30)
             response.raise_for_status()
             return response
+        except requests.RequestException as e:
+            raise APIException(f"HTTP请求失败: {e}")
+
+    @staticmethod
+    def post_weapi_request(url: str, params: str, enc_sec_key: str, cookies: Dict[str, str]) -> str:
+        """发送 weapi POST 请求并返回文本响应"""
+        headers = {
+            'User-Agent': APIConstants.USER_AGENT,
+            'Referer': APIConstants.REFERER,
+        }
+        request_cookies = APIConstants.DEFAULT_COOKIES.copy()
+        request_cookies.update(cookies)
+        try:
+            response = requests.post(url, headers=headers, cookies=request_cookies,
+                                    data={"params": params, "encSecKey": enc_sec_key}, timeout=30)
+            response.raise_for_status()
+            return response.text
         except requests.RequestException as e:
             raise APIException(f"HTTP请求失败: {e}")
 
@@ -494,6 +544,95 @@ class NeteaseAPI:
         enc_id = self.netease_encrypt_id(str(pic_id))
         return f'https://p3.music.126.net/{enc_id}/{pic_id}.jpg?param={size}y{size}'
 
+    def _parse_vip(self, rights: Dict) -> Dict[str, Any]:
+        """从 vipRights / vipnewcenter 返回中解析 VIP 信息"""
+        assoc = rights.get('associator', {}) or {}
+        mpkg = rights.get('musicPackage', {}) or {}
+        red_lv = rights.get('redVipLevel', 0) or rights.get('redVipDynamicLevel', 0) or 0
+
+        src = assoc if assoc.get('rights') else mpkg if mpkg.get('rights') else {}
+        vc = src.get('vipCode', 0)
+        lv = src.get('level', 0)
+        et = src.get('expireTime', 0)
+
+        if not lv and not src and red_lv:
+            vc = 101
+            lv = red_lv
+            et = assoc.get('expireTime', 0) or mpkg.get('expireTime', 0)
+
+        if vc == 100: vt = '黑胶VIP'
+        elif vc == 101: vt = '黑胶SVIP'
+        elif vc in (200, 201): vt = '音乐包'
+        else: vt = 'VIP' if lv > 0 else '普通用户'
+
+        expire = et / 1000 if et else 0
+        import datetime
+        return {
+            'vip_type': vt, 'vip_level': lv, 'expire_ts': expire,
+            'expire_date': datetime.datetime.fromtimestamp(expire).strftime('%Y-%m-%d') if expire else '',
+            'expired': expire < time.time() if expire else True,
+        }
+
+    def get_user_account(self, cookies: Dict[str, str]) -> Dict[str, Any]:
+        """获取用户账号和VIP信息
+
+        POST /weapi/w/nuser/account/get → nickname + vipType
+        POST /weapi/vipnewcenter/app/level/info → level + expireTime (可选)
+        """
+        csrf = cookies.get('__csrf', '')
+        nickname = ''
+        avatar = ''
+        uid = ''
+        vip_type = '普通用户'
+        vip_level = 0
+        expire_date = ''
+        expired = True
+
+        # step1: nuser (weapi)
+        try:
+            url1 = APIConstants.USER_ACCOUNT_API + (f'?csrf_token={csrf}' if csrf else '')
+            p1, sk1 = self.crypto_utils.encrypt_weapi({'type': '0'})
+            t1 = self.http_client.post_weapi_request(url1, p1, sk1, cookies)
+            r1 = json.loads(t1)
+            if r1.get('code') == 200:
+                prof = r1.get('profile', {})
+                acct = r1.get('account', {})
+                nickname = prof.get('nickname', '')
+                avatar = prof.get('avatarUrl', '')
+                uid = prof.get('userId', '')
+                raw_vt = acct.get('vipType', 0)
+                if raw_vt == 11: vip_type = '黑胶SVIP'
+                elif raw_vt == 10: vip_type = '黑胶VIP'
+                elif raw_vt: vip_type = f'VIP({raw_vt})'
+        except Exception:
+            pass
+
+        # step2: vip level info (weapi, 端点可能已更新故静默降级)
+        try:
+            p2, sk2 = self.crypto_utils.encrypt_weapi({'type': '0'})
+            t2 = self.http_client.post_weapi_request(APIConstants.VIP_LEVEL_API, p2, sk2, cookies)
+            r2 = json.loads(t2)
+            if r2.get('code') == 200 and r2.get('data'):
+                d2 = r2['data']
+                rights = {
+                    'associator': d2.get('associator', {}),
+                    'musicPackage': d2.get('musicPackage', {}),
+                    'redVipLevel': d2.get('redVipLevel', 0),
+                }
+                vd = self._parse_vip(rights)
+                if vd.get('vip_type', '普通用户') != '普通用户': vip_type = vd['vip_type']
+                vip_level = vd.get('vip_level', 0)
+                expire_date = vd.get('expire_date', '')
+                expired = vd.get('expired', True)
+        except Exception:
+            pass
+
+        return {
+            'nickname': nickname, 'avatar_url': avatar, 'user_id': uid,
+            'vip_type': vip_type, 'vip_level': vip_level,
+            'expire_date': expire_date, 'expired': expired,
+        }
+
 
 class QRLoginManager:
     """二维码登录管理器"""
@@ -590,11 +729,12 @@ class QRLoginManager:
             cookie_dict = {}
             
             if result.get('code') == 803:
-                # 登录成功，提取cookie
                 all_cookies = response.headers.get('Set-Cookie', '').split(', ')
                 for cookie_str in all_cookies:
-                    if 'MUSIC_U=' in cookie_str:
-                        cookie_dict['MUSIC_U'] = cookie_str.split('MUSIC_U=')[1].split(';')[0]
+                    if '=' in cookie_str:
+                        parts = cookie_str.split(';')[0].strip().split('=', 1)
+                        if len(parts) == 2 and parts[1]:
+                            cookie_dict[parts[0]] = parts[1]
             
             return result.get('code', -1), cookie_dict
         except (json.JSONDecodeError, KeyError) as e:

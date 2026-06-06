@@ -12,3 +12,4 @@ __pycache__
 downloads/
 music_api.log
 cookie.txt
+*.har

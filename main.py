@@ -30,7 +30,7 @@ from flask import Flask, request, send_file, render_template, Response, make_res
 
 try:
     from music_api import (
-        NeteaseAPI, APIException, QualityLevel,
+        NeteaseAPI, APIException, QualityLevel, QRLoginManager,
         url_v1, name_v1, lyric_v1, search_music, 
         playlist_detail, album_detail, batch_song_urls
     )
@@ -423,6 +423,57 @@ class BatchTaskManager:
 
 
 batch_task_mgr = BatchTaskManager(api_service.downloader)
+qr_manager = QRLoginManager()
+
+
+@app.route('/qr-login/start', methods=['POST'])
+def qr_login_start():
+    """生成登录二维码"""
+    try:
+        unikey = qr_manager.generate_qr_key()
+        if not unikey:
+            return APIResponse.error("生成二维码key失败", 500)
+        qr_url = f'https://music.163.com/login?codekey={unikey}'
+        img_data = None
+        try:
+            import qrcode, base64
+            qr = qrcode.QRCode(box_size=6, border=2)
+            qr.add_data(qr_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color='#6c5ce7', back_color='white')
+            buf = BytesIO()
+            img.save(buf, format='PNG')
+            img_data = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+        except Exception:
+            pass
+        return APIResponse.success({'unikey': unikey, 'qr_url': qr_url, 'qr_image': img_data}, "二维码已生成")
+    except Exception as e:
+        api_service.logger.error(f"生成二维码异常: {e}")
+        return APIResponse.error(f"生成失败: {str(e)}", 500)
+
+
+@app.route('/qr-login/check/<unikey>', methods=['GET'])
+def qr_login_check(unikey: str):
+    """检查二维码登录状态"""
+    try:
+        code, cookies = qr_manager.check_qr_login(unikey)
+        if code == 803:
+            parts = [f"MUSIC_U={cookies.get('MUSIC_U', '')}"]
+            for k, v in cookies.items():
+                if k != 'MUSIC_U' and v:
+                    parts.append(f"{k}={v}")
+            parts.append("os=pc;appver=8.9.70")
+            cookie_str = ';'.join(parts)
+            try:
+                api_service.cookie_manager.write_cookie(cookie_str)
+                api_service.logger.info("二维码登录成功，Cookie已保存")
+            except Exception as e:
+                api_service.logger.error(f"保存Cookie失败: {e}")
+            return APIResponse.success({'code': code, 'status': '登录成功', 'cookie': cookie_str})
+        status_map = {801: '等待扫码', 802: '扫码成功，请在手机上确认', 800: '二维码已过期'}
+        return APIResponse.success({'code': code, 'status': status_map.get(code, f'状态码: {code}')})
+    except Exception as e:
+        return APIResponse.error(f"检查登录状态失败: {str(e)}", 500)
 
 
 @app.before_request

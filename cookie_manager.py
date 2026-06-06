@@ -49,7 +49,9 @@ class CookieManager:
         
         # 网易云音乐相关的重要Cookie字段
         self.important_cookies = {
-            'MUSIC_U',      # 用户标识
+            'MUSIC_U',      # 用户标识（必须）
+        }
+        self.optional_cookies = {
             'MUSIC_A',      # 用户认证
             '__csrf',       # CSRF令牌
             'NMTID',        # 设备标识
@@ -277,6 +279,8 @@ class CookieManager:
                 'is_valid': self.is_cookie_valid(),
                 'important_cookies_present': list(self.important_cookies & set(cookies.keys())),
                 'missing_important_cookies': list(self.important_cookies - set(cookies.keys())),
+                'optional_cookies_present': list(self.optional_cookies & set(cookies.keys())),
+                'missing_optional_cookies': list(self.optional_cookies - set(cookies.keys())),
                 'all_cookie_names': list(cookies.keys())
             }
             
