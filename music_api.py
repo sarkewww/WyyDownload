@@ -313,6 +313,28 @@ class NeteaseAPI:
         except (json.JSONDecodeError, KeyError) as e:
             raise APIException(f"解析搜索响应失败: {e}")
     
+    def batch_get_song_urls(self, song_ids: List[int], quality: str, cookies: Dict[str, str]) -> List[Dict[str, Any]]:
+        """批量获取歌曲播放URL"""
+        results = []
+        for song_id in song_ids:
+            try:
+                result = self.get_song_url(song_id, quality, cookies)
+                if result and result.get('data') and len(result['data']) > 0:
+                    song_data = result['data'][0]
+                    results.append({
+                        'id': song_data.get('id', song_id),
+                        'url': song_data.get('url', ''),
+                        'level': song_data.get('level', quality),
+                        'size': song_data.get('size', 0),
+                        'type': song_data.get('type', ''),
+                        'br': song_data.get('br', 0),
+                    })
+                else:
+                    results.append({'id': song_id, 'url': '', 'level': quality, 'size': 0, 'type': '', 'br': 0})
+            except Exception:
+                results.append({'id': song_id, 'url': '', 'level': quality, 'size': 0, 'type': '', 'br': 0})
+        return results
+
     def get_playlist_detail(self, playlist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
         """获取歌单详情
         
@@ -647,6 +669,12 @@ def album_detail(album_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
     """获取专辑详情（向后兼容）"""
     api = NeteaseAPI()
     return api.get_album_detail(album_id, cookies)
+
+
+def batch_song_urls(song_ids: List[int], quality: str, cookies: Dict[str, str]) -> List[Dict[str, Any]]:
+    """批量获取歌曲URL（向后兼容）"""
+    api = NeteaseAPI()
+    return api.batch_get_song_urls(song_ids, quality, cookies)
 
 
 def get_pic_url(pic_id: Optional[int], size: int = 300) -> str:

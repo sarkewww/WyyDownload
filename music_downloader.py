@@ -10,11 +10,12 @@
 
 import os
 import re
+import time
 import asyncio
 import aiohttp
 import aiofiles
 from io import BytesIO
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Dict, List, Optional, Tuple, Any, Union, Callable
 from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
@@ -225,69 +226,67 @@ class MusicDownloader:
         except Exception as e:
             raise DownloadException(f"获取音乐信息时发生错误: {e}")
     
-    def download_music_file(self, music_id: int, quality: str = "standard") -> DownloadResult:
+    def download_music_file(self, music_id: int, quality: str = "standard",
+                            progress_callback: Callable[[int, int, int], None] = None) -> DownloadResult:
         """下载音乐文件到本地
         
         Args:
             music_id: 音乐ID
             quality: 音质等级
-            
-        Returns:
-            下载结果对象
+            progress_callback: 进度回调 callback(downloaded, total_size, speed)
         """
         try:
-            # 获取音乐信息
             music_info = self.get_music_info(music_id, quality)
-            
-            # 生成文件名
             filename = f"{music_info.artists} - {music_info.name}"
             safe_filename = self._sanitize_filename(filename)
-            
-            # 确定文件扩展名
             file_ext = self._determine_file_extension(music_info.download_url)
             file_path = self.download_dir / f"{safe_filename}{file_ext}"
             
-            # 检查文件是否已存在
             if file_path.exists():
-                return DownloadResult(
-                    success=True,
-                    file_path=str(file_path),
-                    file_size=file_path.stat().st_size,
-                    music_info=music_info
-                )
+                if progress_callback:
+                    fs = file_path.stat().st_size
+                    progress_callback(fs, fs, 0)
+                return DownloadResult(success=True, file_path=str(file_path),
+                                      file_size=file_path.stat().st_size, music_info=music_info)
             
-            # 下载文件
-            response = requests.get(music_info.download_url, stream=True, timeout=30)
+            response = requests.get(music_info.download_url, stream=True, timeout=60)
             response.raise_for_status()
             
-            # 写入文件
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+            if progress_callback:
+                total_size = int(response.headers.get('content-length', music_info.file_size))
+                downloaded = 0
+                start_time = time.time()
+                last_time = start_time
+                with open(file_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            now = time.time()
+                            if now - last_time >= 0.3:
+                                elapsed = now - start_time
+                                speed = int(downloaded / elapsed) if elapsed > 0 else 0
+                                progress_callback(downloaded, total_size, speed)
+                                last_time = now
+                    if total_size > 0 and downloaded > 0:
+                        elapsed = time.time() - start_time
+                        speed = int(downloaded / elapsed) if elapsed > 0 else 0
+                        progress_callback(downloaded, total_size, speed)
+            else:
+                with open(file_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
             
-            # 写入音乐标签
             self._write_music_tags(file_path, music_info)
-            
-            return DownloadResult(
-                success=True,
-                file_path=str(file_path),
-                file_size=file_path.stat().st_size,
-                music_info=music_info
-            )
-            
+            return DownloadResult(success=True, file_path=str(file_path),
+                                  file_size=file_path.stat().st_size, music_info=music_info)
         except DownloadException:
             raise
         except requests.RequestException as e:
-            return DownloadResult(
-                success=False,
-                error_message=f"下载请求失败: {e}"
-            )
+            return DownloadResult(success=False, error_message=f"下载请求失败: {e}")
         except Exception as e:
-            return DownloadResult(
-                success=False,
-                error_message=f"下载过程中发生错误: {e}"
-            )
+            return DownloadResult(success=False, error_message=f"下载过程中发生错误: {e}")
     
     async def download_music_file_async(self, music_id: int, quality: str = "standard") -> DownloadResult:
         """异步下载音乐文件到本地
