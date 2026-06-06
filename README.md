@@ -1,55 +1,49 @@
-# 网易云音乐无损解析
+# 网易云音乐工具箱
 
 <div align="center">
 
-![GitHub stars](https://img.shields.io/github/stars/Suxiaoqinx/Netease_url?style=flat-square)
-![GitHub forks](https://img.shields.io/github/forks/Suxiaoqinx/Netease_url?style=flat-square)
-![GitHub issues](https://img.shields.io/github/issues/Suxiaoqinx/Netease_url?style=flat-square)
-![GitHub license](https://img.shields.io/github/license/Suxiaoqinx/Netease_url?style=flat-square)
+![GitHub stars](https://img.shields.io/github/stars/sarkewww/WyyDownload?style=flat-square)
+![GitHub license](https://img.shields.io/github/license/sarkewww/WyyDownload?style=flat-square)
 
-**功能强大的网易云音乐解析工具**
+**基于 Flask + jQuery 的网易云音乐解析下载工具**
 
-支持歌曲搜索 | 单曲解析 | 歌单解析 | 专辑解析 | 音乐下载
-
-[在线体验](https://wyapi.toubiec.cn) • [使用文档](./使用文档.md) • [问题反馈](https://github.com/Suxiaoqinx/Netease_url/issues)
+歌曲搜索 | 单曲解析 | 歌单专辑批处理 | 多音质下载 | 扫码登录
 
 </div>
 
 ---
 
-> **⚠️ 重要声明**  
-> 本项目采用 MIT 许可证开源。根据 MIT 许可证的条款，任何个人或组织均可自由使用、修改和分发本项目的源代码，包括用于商业项目。
-
-**注意**：本项目旨在为开源社区做贡献，我们鼓励用户：
-- 在遵守开源精神的前提下使用和分享代码
-- 如有改进，欢迎贡献回本项目
-- 在商业使用中，请考虑对开源项目的支持和回馈
-
-虽然 MIT 许可证允许商业使用，但我们希望用户能尊重开源精神，合理使用本项目。
-
 ## ✨ 功能特性
 
 ### 🎵 核心功能
-- **🔍 歌曲搜索**：支持关键词搜索网易云音乐库中的歌曲
-- **🎧 单曲解析**：解析单首歌曲的详细信息和下载链接
-- **📋 歌单解析**：批量解析歌单中的所有歌曲信息
-- **💿 专辑解析**：批量解析专辑中的所有歌曲信息
-- **⬇️ 音乐下载**：支持多种音质的音乐文件下载
+- **歌曲搜索**：关键词搜索，支持单曲/专辑/歌手/歌单四种类型
+- **单曲解析**：获取歌曲详情、播放链接、歌词（支持原文/翻译/双语切换）
+- **歌单处理**：查看、批量解析 URL、一键播放全部、批量下载 ZIP
+- **专辑处理**：查看、批量解析 URL、批量下载 ZIP、封面/歌词导出
+- **音乐下载**：单曲下载 + 歌单/专辑批量打包 ZIP，支持断点续传
+- **扫码登录**：二维码登录，自动保存 Cookie，支持多账号切换
 
 ### 🎼 音质支持
-- `standard`：标准音质 (128kbps)
-- `exhigh`：极高音质 (320kbps)
-- `lossless`：无损音质 (FLAC)
-- `hires`：Hi-Res音质 (24bit/96kHz)
-- `jyeffect`：高清环绕声
-- `sky`：沉浸环绕声
-- `jymaster`：超清母带
+| 参数 | 名称 | 需要 |
+|------|------|------|
+| `standard` | 标准音质 | - |
+| `exhigh` | 极高音质 | VIP |
+| `lossless` | 无损音质 | VIP |
+| `hires` | Hi-Res | VIP |
+| `dolby` | 杜比全景声 | SVIP |
+| `sky` | 沉浸环绕声 | SVIP |
+| `jyeffect` | 高清环绕声 | SVIP |
+| `jymaster` | 超清母带 | SVIP |
 
-### 🌐 使用方式
-- **Web界面**：直观友好的网页操作界面
-- **RESTful API**：完整的API接口支持
-- **批量处理**：支持歌单和专辑的批量解析
-- **多格式支持**：支持ID和链接多种输入格式
+### 🛠 工具功能
+- **下载记录**：服务端持久化，支持历史重下
+- **M3U 导出**：导出播放列表，可在 VLC / foobar2000 中播放
+- **歌词下载**：单曲 LRC + 歌单/专辑批量 ZIP
+- **封面下载**：单曲 + 歌单/专辑批量 ZIP
+- **文件名模板**：下载文件命名格式可定制
+- **速率限制**：内置请求限流，防止滥用
+
+![首页仪表盘](screenshots/dashboard.png)
 
 ---
 
@@ -57,256 +51,148 @@
 
 ### 环境要求
 - Python 3.7+
-- 网易云音乐黑胶会员账号
+- 网易云音乐账号（高音质需黑胶会员）
 
-### 安装步骤
+### 安装
 
-#### 1. 克隆项目
 ```bash
-git clone https://github.com/Suxiaoqinx/Netease_url.git
-cd Netease_url
-```
-
-#### 2. 安装依赖
-```bash
+git clone https://github.com/sarkewww/WyyDownload.git
+cd WyyDownload
 pip install -r requirements.txt
 ```
 
-#### 3. 配置Cookie
-在 `cookie.txt` 文件中填入黑胶会员账号的Cookie：
+### 配置 Cookie
 
-> 💡 **获取Cookie方法**：登录网易云音乐网页版 → F12开发者工具 → Network标签页 → 复制任意请求的Cookie值
+在项目根目录创建 `cookie.txt`，填入网易云音乐 Cookie。也可通过 Web 界面扫码登录自动保存。
 
-#### 4. 启动服务
+> **获取 Cookie**：登录网易云音乐网页版 → F12 → Application → Cookies → 复制 `MUSIC_U` 等字段。
+
+### 启动
+
 ```bash
 python main.py
 ```
 
-#### 5. 访问界面
-打开浏览器访问：`http://localhost:5000`
+打开 http://localhost:5000
 
-### 🐳 Docker部署
+---
 
-```bash
-# 使用Docker Compose
-docker-compose up -d
+## 🔌 API 接口
 
-# 或使用Docker
-docker build -t netease-music-api .
-docker run -d -p 5000:5000 netease-music-api
-```
+**Base URL**: `http://localhost:5000`  
+**响应格式**: `{"status": 200, "success": true, "message": "...", "data": ...}`
+
+| 方法 | 路由 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查 |
+| POST | `/Search` | 搜索音乐（`keyword`, `type`, `limit`, `offset`） |
+| POST | `/Song_V1` | 单曲解析（`url`, `level`） |
+| GET/POST | `/playlist` | 歌单详情（`id`） |
+| POST | `/playlist/batch` | 批量解析歌单 URL（`id`, `level`） |
+| POST | `/playlist/download/batch/start` | 启动歌单批量下载 |
+| GET | `/playlist/download/batch/progress/<id>` | 查询下载进度 |
+| GET | `/playlist/download/batch/result/<id>` | 获取下载 ZIP |
+| GET/POST | `/album` | 专辑详情（`id`） |
+| POST | `/album/batch` | 批量解析专辑 URL |
+| POST | `/album/download/batch/start` | 启动专辑批量下载 |
+| GET/POST | `/download` | 单曲下载（`id`, `quality`） |
+| GET/POST | `/lyric/download` | 下载 LRC 歌词 |
+| POST | `/lyric/batch` | 批量获取歌词 JSON |
+| POST | `/playlist/lyric/batch` | 批量下载歌单歌词 ZIP |
+| POST | `/album/lyric/batch` | 批量下载专辑歌词 ZIP |
+| POST | `/playlist/cover/batch` | 批量下载歌单封面 ZIP |
+| POST | `/album/cover/batch` | 批量下载专辑封面 ZIP |
+| GET/POST | `/cookie` | Cookie 管理 |
+| GET/POST/DELETE | `/dl/history` | 下载记录管理 |
+| POST | `/qr-login/start` | 生成登录二维码 |
+| GET | `/qr-login/check/<key>` | 检查登录状态 |
+| GET | `/api/info` | API 信息 |
 
 ---
 
 ## 📖 使用指南
 
-### Web界面使用
+### 仪表盘
+首页显示 Cookie 状态、快速搜索、下载记录、多账号切换、文件名模板。
 
-#### 🔍 歌曲搜索
-1. 选择功能：**歌曲搜索**
-2. 输入关键词（歌曲名、歌手名等）
-3. 点击**搜索**按钮
-4. 在搜索结果中点击**解析**或**下载**按钮
+### 歌曲搜索
+1. 选择搜索类型：单曲 / 专辑 / 歌手 / 歌单
+2. 输入关键词，点击搜索
+3. 单曲结果点击「解析」跳转解析页，「下载」跳转下载页
+4. 专辑/歌单结果点击「查看」跳转对应页面自动加载
 
-#### 🎧 单曲解析
-1. 选择功能：**单曲解析**
-2. 输入歌曲ID或网易云音乐链接
-   - 支持格式：`1234567890` 或 `https://music.163.com/song?id=1234567890`
-3. 点击**解析**按钮查看歌曲信息
+### 单曲解析
+1. 输入歌曲 ID 或链接（支持 `163cn.tv` 短链）
+2. 选择音质
+3. 点击「解析」查看歌曲信息、在线播放、歌词显示
+4. 支持原文/翻译/双语歌词切换
 
-#### 📋 歌单解析
-1. 选择功能：**歌单解析**
-2. 输入歌单ID或网易云音乐歌单链接
-   - 支持格式：`1234567890` 或 `https://music.163.com/playlist?id=1234567890`
-3. 点击**解析**按钮查看歌单中所有歌曲
-4. 点击单首歌曲的**解析**或**下载**按钮
+![单曲解析](screenshots/song-parse.png)
 
-#### 💿 专辑解析
-1. 选择功能：**专辑解析**
-2. 输入专辑ID或网易云音乐专辑链接
-   - 支持格式：`1234567890` 或 `https://music.163.com/album?id=1234567890`
-3. 点击**解析**按钮查看专辑中所有歌曲
-4. 点击单首歌曲的**解析**或**下载**按钮
+### 歌单 / 专辑
+1. 输入 ID 或链接，点击「查看」浏览曲目
+2. 点击「解析全部」批量获取所有歌曲的下载链接
+3. 点击「播放全部」创建 APlayer 播放列表（自动加载歌词）
+4. 点击「下载 ZIP」启动多线程批量下载，带进度条和失败重试
 
-#### ⬇️ 音乐下载
-1. 选择功能：**音乐下载**
-2. 输入歌曲ID或链接
-3. 选择音质（标准/极高/无损/Hi-Res等）
-4. 点击**下载**按钮
+![歌单批处理](screenshots/batch-result.png)
 
-### 支持的链接格式
-
-```
-# 歌曲链接
-https://music.163.com/song?id=1234567890
-https://music.163.com/#/song?id=1234567890
-
-# 歌单链接
-https://music.163.com/playlist?id=1234567890
-https://music.163.com/#/playlist?id=1234567890
-
-# 专辑链接
-https://music.163.com/album?id=1234567890
-https://music.163.com/#/album?id=1234567890
-
-# 直接使用ID
-1234567890
-```
-
-## 🔌 API接口文档
-
-### 基础信息
-- **Base URL**: `http://localhost:5000`
-- **请求方式**: GET / POST
-- **响应格式**: JSON
-
-### 接口列表
-
-#### 1. 健康检查
-```http
-GET /health
-```
-**响应示例**:
-```json
-{
-  "status": "ok",
-  "message": "Service is running"
-}
-```
-
-#### 2. 歌曲搜索
-```http
-POST /search
-Content-Type: application/json
-
-{
-  "keywords": "周杰伦 稻香",
-  "limit": 10
-}
-```
-**响应示例**:
-```json
-{
-  "code": 200,
-  "result": {
-    "songs": [
-      {
-        "id": 185668,
-        "name": "稻香",
-        "artists": ["周杰伦"],
-        "album": "魔杰座",
-        "duration": 223000
-      }
-    ]
-  }
-}
-```
-
-#### 3. 单曲解析
-```http
-POST /song
-Content-Type: application/json
-
-{
-  "id": "185668"
-}
-```
-
-#### 4. 歌单解析
-```http
-POST /playlist
-Content-Type: application/json
-
-{
-  "id": "123456789"
-}
-```
-
-#### 5. 专辑解析
-```http
-POST /album
-Content-Type: application/json
-
-{
-  "id": "123456789"
-}
-```
-
-#### 6. 音乐下载
-```http
-POST /download
-Content-Type: application/json
-
-{
-  "id": "185668",
-  "quality": "lossless"
-}
-```
-**响应**: 直接返回音频文件流
+### 音乐下载
+1. 输入歌曲 ID 或链接
+2. 选择音质
+3. 点击「下载」，支持断点续传
+4. 下载记录自动保存，可随时重下
 
 ---
 
-## 音质参数说明（仅限单曲解析）
+## 🗺 版本历史
 
-- `standard`：标准音质
-- `exhigh`：极高音质
-- `lossless`：无损音质
-- `hires`：Hi-Res音质
-- `jyeffect`：高清环绕声
-- `sky`：沉浸环绕声
-- `jymaster`：超清母带
+### v2.4.6（当前）
+- 修复 20+ bug：双层 JSON、空歌单崩溃、线程锁安全、Cookie 编码、QR 刷新泄漏、歌词翻译匹配、HTTP 重试、封面缓存、断点续传零字节保护
+- 新增：速率限制、下载记录持久化、批量歌词加载、搜索防抖、二维码过期自动刷新
+- 新增：杜比全景声 `dolby` 音质支持
+- 新增：26 个单元测试（加密/响应/文件名/下载器）
+- 前端：JS/CSS 静态资源本地化
 
-> 黑胶VIP音质：standard, exhigh, lossless, hires, jyeffect  
-> 黑胶SVIP音质：sky, jymaster
+### v2.2
+- 批量下载线程安全问题修复（死锁、I/O 占锁、数据竞争）
+- 专辑封面空 URL 判断修复
+- 断点续传 `.part` 文件 total_size 恢复
 
----
+### v2.1
+- 搜索分页 offset 修复
+- ZIP 文件名支持创建者
+- HTTP 头 latin-1 中文编码修复
 
-## Docker 一键部署
-
-1. **修改参数**
-
-   - 如需修改端口，请编辑 `.env` 或 `docker-compose.yml` 文件中的 `ports` 配置，例如：
-
-     ```yaml
-     ports:
-       - "8080:5000"
-     ```
-
-2. **启动服务**
-
-   ```bash
-   docker-compose up -d
-   ```
+### v2.0
+- 全新 UI：深色/浅色主题、Tab 切换、Toast 通知
+- 批量下载 ZIP、取消任务
+- M3U 播放列表导出
+- 下载进度条（每文件 + 总体）
+- 断点续传（.part 文件）
 
 ---
 
-## 在线演示
+## 📝 技术栈
 
-[在线解析](https://wyapi.toubiec.cn/)
-
----
-
-## 注意事项
-
-- 必须使用黑胶会员账号的 Cookie 才能解析高音质资源。
-- Cookie 格式请严格按照 `cookie.txt` 示例填写。
-
----
-
-## 致谢
-
-- [Ravizhan](https://github.com/ravizhan)
+| 层 | 技术 |
+|----|------|
+| 后端 | Python 3.10 + Flask |
+| 前端 | Bootstrap 5 + jQuery 3.7 + APlayer |
+| 加密 | AES-ECB（eapi 加密） |
+| 音频 | mutagen（MP3/FLAC/M4A 标签写入） |
+| 测试 | unittest（26 用例） |
 
 ---
 
-## 反馈与交流
+## 📄 许可证
 
-- 在 Github [Issues](https://github.com/Suxiaoqinx/Netease_url/issues) 提交反馈
-- 或访问 [我的博客](https://www.toubiec.cn)
+本项目基于 [MIT License](LICENSE) 开源。
 
 ---
 
-欢迎 Star、Fork 和 PR！
+## 🙏 致谢
 
+本项目基于 [Suxiaoqinx/Netease_url](https://github.com/Suxiaoqinx/Netease_url) 开发，感谢原作者 **苏晓晴（Suxiaoqinx）** 及所有贡献者。
 
-
+v2.0 起由 sarkewww 持续维护，包括架构重构、bug 修复、性能优化和功能增强。

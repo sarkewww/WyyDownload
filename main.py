@@ -33,7 +33,7 @@ try:
     from music_api import (
         NeteaseAPI, APIException, QRLoginManager,
         url_v1, name_v1, lyric_v1, search_music, 
-        playlist_detail, album_detail, batch_song_urls
+        playlist_detail, album_detail
     )
     from cookie_manager import CookieManager, CookieException
     from music_downloader import MusicDownloader, DownloadException
@@ -65,8 +65,7 @@ class APIResponse:
         response = {
             'status': status_code,
             'success': True,
-            'message': message
-        }
+            'message': message       }
         if data is not None:
             response['data'] = data
         return response, status_code
@@ -147,7 +146,7 @@ class MusicAPIService:
                     response = requests.get(id_or_url, allow_redirects=False, timeout=10)
                     id_or_url = response.headers.get('Location', id_or_url)
                 except Exception:
-                    pass
+                    api_service.logger.debug(f"短链接解析失败: {id_or_url}")
 
             if 'music.163.com' in id_or_url:
                 index = id_or_url.find('id=') + 3
@@ -215,7 +214,7 @@ class MusicAPIService:
 
 # 创建Flask应用和服务实例
 config = APIConfig()
-app = Flask(__name__)
+app = Flask(__name__, static_folder='templates/static')
 api_service = MusicAPIService(config)
 
 
@@ -276,7 +275,7 @@ def _merge_translation_lyric(lrc: str, tlyric: str) -> str:
 class BatchTaskManager:
     """批量下载任务管理器（多线程）"""
 
-    TTL_SECONDS = 600  # 任务完成后 10 分钟自动清理
+    TTL_SECONDS = 3600  # 任务完成后 60 分钟自动清理
 
     def __init__(self, downloader):
         self.downloader = downloader
@@ -314,9 +313,10 @@ class BatchTaskManager:
         return task_id
 
     def _run_download(self, task_id: str, tracks: List[Dict]):
-        task = self.tasks.get(task_id)
-        if not task:
-            return
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return
         level = task['level']
         task['_cancelled'] = False
         downloader = self.downloader
@@ -338,7 +338,7 @@ class BatchTaskManager:
                     try:
                         future.result()
                     except Exception:
-                        pass
+                        api_service.logger.error(f"[DL-TASK-{task_id}] unexpected download error", exc_info=True)
             pl_name = task['playlist_info'].get('name', 'playlist')
             pl_creator = task['playlist_info'].get('creator', '')
             success_count = task.get('success', 0)
@@ -368,7 +368,8 @@ class BatchTaskManager:
                     t['status'] = 'failed'
 
     def _download_one(self, task_id, idx, track, sid, safe_name, level, tmp_path, downloader):
-        t = self.tasks.get(task_id)
+        with self.lock:
+            t = self.tasks.get(task_id)
         if t is None:
             return False, None
         with self.lock:
@@ -394,7 +395,7 @@ class BatchTaskManager:
                 tsk['_file_progress'] = fp
 
         try:
-            result = downloader.download_music_file(sid, level, progress_callback=progress_cb)
+            result = downloader.download_music_file(sid, level, progress_callback=progress_cb, cookies=t.get('cookies'))
             if result.success and result.file_path:
                 src = Path(result.file_path)
                 dst = tmp_path / f"{safe_name}{src.suffix}"
@@ -477,7 +478,7 @@ class BatchTaskManager:
 batch_task_mgr = BatchTaskManager(api_service.downloader)
 qr_manager = QRLoginManager()
 
-VALID_LEVELS = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster']
+VALID_LEVELS = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'dolby', 'jyeffect', 'jymaster']
 ILLEGAL_CHARS = r'<>:"/\|?*'
 
 
@@ -573,14 +574,23 @@ def qr_login_check(unikey: str):
         return APIResponse.error(f"检查登录状态失败: {str(e)}", 500)
 
 
+# 简单速率限制（每IP每秒最多30请求）
+_rate_limiter: Dict[str, List[float]] = {}
+RATE_LIMIT = 30  # 每秒请求数
+RATE_WINDOW = 1  # 秒
+
 @app.before_request
 def before_request():
     """请求前处理"""
-    # 记录请求信息
-    api_service.logger.info(
-        f"{request.method} {request.path} - IP: {request.remote_addr} - "
-        f"User-Agent: {request.headers.get('User-Agent', 'Unknown')}"
-    )
+    now = time.time()
+    ip = request.remote_addr or '0.0.0.0'
+    if ip not in _rate_limiter:
+        _rate_limiter[ip] = []
+    _rate_limiter[ip] = [t for t in _rate_limiter[ip] if now - t < RATE_WINDOW]
+    if len(_rate_limiter[ip]) >= RATE_LIMIT:
+        return APIResponse.error("请求过于频繁，请稍后再试", 429)
+    _rate_limiter[ip].append(now)
+    api_service.logger.debug(f"{request.method} {request.path}")
 
 
 @app.after_request
@@ -827,14 +837,8 @@ def get_playlist():
         
         cookies = api_service._get_cookies()
         result = playlist_detail(playlist_id, cookies)
-        
-        # 适配前端期望的响应格式
-        response_data = {
-            'status': 'success',
-            'playlist': result
-        }
-        
-        return APIResponse.success(response_data, "获取歌单详情成功")
+
+        return APIResponse.success({'playlist': result}, "获取歌单详情成功")
         
     except Exception as e:
         api_service.logger.error(f"获取歌单异常: {e}\n{traceback.format_exc()}")
@@ -843,7 +847,7 @@ def get_playlist():
 
 @app.route('/playlist/batch', methods=['GET', 'POST'])
 def batch_get_playlist_urls():
-    """批量获取歌单中所有歌曲的URL"""
+    """批量获取歌单中所有歌曲的URL（复用 get_tracks_and_info + _do_batch_resolve）"""
     try:
         data = api_service._safe_get_request_data()
         playlist_id = data.get('id')
@@ -851,61 +855,12 @@ def batch_get_playlist_urls():
         validation_error = api_service._validate_request_params({'playlist_id': playlist_id})
         if validation_error:
             return validation_error
-        valid_levels = VALID_LEVELS
-        if level not in valid_levels:
-            return APIResponse.error(f"无效的音质参数，支持: {', '.join(valid_levels)}")
-        cookies = api_service._get_cookies()
-        playlist = playlist_detail(playlist_id, cookies)
-        if not playlist or not playlist.get('tracks'):
-            return APIResponse.error("获取歌单详情失败或歌单为空", 404)
-        tracks = playlist['tracks']
-        song_ids: List[int] = [t['id'] for t in tracks]
-        total = len(song_ids)
-        api_service.logger.info(f"批量解析歌单 {playlist_id}，共 {total} 首歌曲，音质: {level}")
-        urls_result: Dict[int, Dict] = {}
-        with ThreadPoolExecutor(max_workers=min(5, total)) as executor:
-            for i in range(0, len(song_ids), 20):
-                batch = song_ids[i:i + 20]
-                future_to_id = {executor.submit(url_v1, sid, level, cookies): sid for sid in batch}
-                for future in as_completed(future_to_id):
-                    sid = future_to_id[future]
-                    try:
-                        result = future.result()
-                        if result and result.get('data') and len(result['data']) > 0:
-                            d = result['data'][0]
-                            urls_result[sid] = {
-                                'url': d.get('url', ''), 'size': d.get('size', 0),
-                                'size_formatted': api_service._format_file_size(d.get('size', 0)),
-                                'type': d.get('type', ''), 'level': d.get('level', level),
-                                'quality_name': api_service._get_quality_display_name(d.get('level', level)),
-                                'br': d.get('br', 0),
-                            }
-                        else:
-                            urls_result[sid] = None
-                    except Exception:
-                        urls_result[sid] = None
-        resolved_tracks = []
-        for track in tracks:
-            url_info = urls_result.get(track['id'])
-            td = {'id': track['id'], 'name': track['name'], 'artists': track['artists'],
-                   'album': track['album'], 'picUrl': track['picUrl'],
-                   'duration': track.get('duration', 0)}
-            if url_info:
-                td.update(url_info)
-            else:
-                td.update({'url': '', 'size': 0, 'size_formatted': '获取失败', 'type': '',
-                            'level': level, 'quality_name': api_service._get_quality_display_name(level), 'br': 0})
-            resolved_tracks.append(td)
-        response_data = {
-            'playlist': {'id': playlist.get('id'), 'name': playlist.get('name'),
-                          'coverImgUrl': playlist.get('coverImgUrl'), 'creator': playlist.get('creator'),
-                          'trackCount': playlist.get('trackCount'), 'description': playlist.get('description')},
-            'tracks': resolved_tracks,
-            'resolved': sum(1 for t in resolved_tracks if t['url']),
-            'total': total,
-        }
-        api_service.logger.info(f"批量解析完成，成功: {response_data['resolved']}/{total}")
-        return APIResponse.success(response_data, "批量获取歌单歌曲URL成功")
+        if level not in VALID_LEVELS:
+            return APIResponse.error(f"无效的音质参数，支持: {', '.join(VALID_LEVELS)}")
+        tracks, info, err = get_tracks_and_info('playlist', playlist_id)
+        if err:
+            return err
+        return _do_batch_resolve(tracks, info, level, 'playlist')
     except Exception as e:
         api_service.logger.error(f"批量获取歌单URL异常: {e}\n{traceback.format_exc()}")
         return APIResponse.error(f"批量获取失败: {str(e)}", 500)
@@ -946,6 +901,7 @@ def batch_download_start():
 
 
 @app.route('/playlist/download/batch/progress/<task_id>', methods=['GET'])
+@app.route('/album/download/batch/progress/<task_id>', methods=['GET'])
 def batch_download_progress(task_id: str):
     """查询批量下载进度（实时速度）"""
     try:
@@ -958,6 +914,7 @@ def batch_download_progress(task_id: str):
 
 
 @app.route('/playlist/download/batch/result/<task_id>', methods=['GET'])
+@app.route('/album/download/batch/result/<task_id>', methods=['GET'])
 def batch_download_result(task_id: str):
     """获取批量下载结果ZIP"""
     try:
@@ -970,8 +927,9 @@ def batch_download_result(task_id: str):
         zip_buffer, zip_filename, task_info = result
         zip_data = zip_buffer.getvalue()
         api_service.logger.info(f"[DL-RESULT-{task_id}] sending ZIP, {len(zip_data)} bytes, {task_info.get('success')}/{task_info.get('total')} songs")
+        safe_fn = quote(zip_filename)
         response = Response(zip_data, mimetype='application/zip',
-                           headers={'Content-Disposition': f'attachment; filename={zip_filename}'})
+                           headers={'Content-Disposition': f"attachment; filename*=UTF-8''{safe_fn}"})
         response.headers['X-Download-Count'] = str(task_info.get('success', 0))
         response.headers['X-Total-Count'] = str(task_info.get('total', 0))
         response.headers['X-Fail-List'] = quote(json.dumps(task_info.get('errors', [])), safe='')
@@ -982,6 +940,7 @@ def batch_download_result(task_id: str):
 
 
 @app.route('/playlist/download/batch/cancel/<task_id>', methods=['POST'])
+@app.route('/album/download/batch/cancel/<task_id>', methods=['POST'])
 def batch_download_cancel(task_id: str):
     """取消批量下载任务"""
     try:
@@ -1158,6 +1117,8 @@ def batch_download_cover():
 
 def _do_batch_resolve(tracks, info, level, source='playlist'):
     """执行批量 URL 解析并返回结果"""
+    if not tracks:
+        return APIResponse.success({'tracks': [], 'resolved': 0, 'total': 0, source: info})
     cookies = api_service._get_cookies()
     song_ids = [t['id'] for t in tracks]
     api_service.logger.info(f"批量解析 {source} {info.get('id')}, 共 {len(song_ids)} 首")
@@ -1214,13 +1175,9 @@ def album_batch_download_start():
         validation_error = api_service._validate_request_params({'album_id': album_id})
         if validation_error: return validation_error
         if level not in VALID_LEVELS: return APIResponse.error("无效音质")
+        tracks, info, err = get_tracks_and_info('album', album_id)
+        if err: return err
         cookies = api_service._get_cookies()
-        album = album_detail(album_id, cookies)
-        if not album or not album.get('songs'): return APIResponse.error("获取专辑失败", 404)
-        tracks = album['songs']
-        info = {'id': album.get('id'), 'name': album.get('name'),
-            'coverImgUrl': album.get('coverImgUrl'), 'creator': album.get('artist', ''),
-            'trackCount': len(tracks), 'description': album.get('description', '')}
         task_id = batch_task_mgr.create_task(tracks, info, level, cookies)
         api_service.logger.info(f"专辑批量下载任务: {task_id}, 共 {len(tracks)} 首")
         return APIResponse.success({'task_id': task_id}, "下载任务已创建")
@@ -1298,14 +1255,8 @@ def get_album():
         
         cookies = api_service._get_cookies()
         result = album_detail(album_id, cookies)
-        
-        # 适配前端期望的响应格式
-        response_data = {
-            'status': 200,
-            'album': result
-        }
-        
-        return APIResponse.success(response_data, "获取专辑详情成功")
+
+        return APIResponse.success({'album': result}, "获取专辑详情成功")
         
     except Exception as e:
         api_service.logger.error(f"获取专辑异常: {e}\n{traceback.format_exc()}")
@@ -1324,7 +1275,7 @@ def download_music_api():
         return_format = data.get('format', 'file')  # file 或 json
         
         # 参数验证
-        validation_error = api_service._validate_request_params({'music_id': music_id})
+        validation_error = api_service._validate_request_params({'id': music_id})
         if validation_error:
             return validation_error
         
@@ -1380,7 +1331,7 @@ def download_music_api():
             # 使用优化后的下载器下载
             try:
                 download_result = api_service.downloader.download_music_file(
-                    music_id, quality
+                    music_id, quality, cookies=cookies
                 )
                 
                 if not download_result.success:
@@ -1434,6 +1385,86 @@ def download_music_api():
         return APIResponse.error(f"下载异常: {str(e)}", 500)
 
 
+# ---------- 下载记录（文件持久化） ----------
+DL_HISTORY_PATH = Path(__file__).parent / 'dl_history.json'
+
+def _load_dl_history() -> list:
+    try:
+        if DL_HISTORY_PATH.exists():
+            return json.loads(DL_HISTORY_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return []
+
+def _save_dl_history(records: list):
+    try:
+        DL_HISTORY_PATH.write_text(json.dumps(records, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        pass
+
+@app.route('/dl/history', methods=['GET'])
+def dl_history_get():
+    records = _load_dl_history()[:50]
+    return APIResponse.success(records)
+
+@app.route('/dl/history', methods=['POST'])
+def dl_history_add():
+    try:
+        data = api_service._safe_get_request_data()
+        name = data.get('name', '')
+        song_id = data.get('song_id', '')
+        quality = data.get('quality', '')
+        if not name or not song_id:
+            return APIResponse.error("缺少必要参数")
+        records = _load_dl_history()
+        records.insert(0, {
+            'name': name, 'song_id': str(song_id), 'quality': quality,
+            'time': time.strftime('%Y-%m-%d %H:%M:%S')
+        })
+        _save_dl_history(records[:50])
+        return APIResponse.success(None, "记录已保存")
+    except Exception as e:
+        return APIResponse.error(f"保存失败: {str(e)}", 500)
+
+@app.route('/dl/history', methods=['DELETE'])
+def dl_history_clear():
+    try:
+        _save_dl_history([])
+        return APIResponse.success(None, "记录已清空")
+    except Exception as e:
+        return APIResponse.error(f"清空失败: {str(e)}", 500)
+
+
+# ---------- 批量歌词 ----------
+@app.route('/lyric/batch', methods=['POST'])
+def batch_lyric():
+    try:
+        data = api_service._safe_get_request_data()
+        ids_str = data.get('ids', '')
+        if not ids_str:
+            return APIResponse.error("缺少ids参数")
+        song_ids = [int(x.strip()) for x in ids_str.split(',') if x.strip().isdigit()]
+        if not song_ids:
+            return APIResponse.error("无效的歌曲ID列表")
+        cookies = api_service._get_cookies()
+        result = {}
+        with ThreadPoolExecutor(max_workers=min(5, len(song_ids))) as executor:
+            f2id = {executor.submit(lyric_v1, sid, cookies): sid for sid in song_ids}
+            for future in as_completed(f2id):
+                sid = f2id[future]
+                try:
+                    li = future.result()
+                    result[sid] = {
+                        'lyric': li.get('lrc', {}).get('lyric', '') if li else '',
+                        'tlyric': li.get('tlyric', {}).get('lyric', '') if li else ''
+                    }
+                except Exception:
+                    result[sid] = {'lyric': '', 'tlyric': ''}
+        return APIResponse.success(result)
+    except Exception as e:
+        return APIResponse.error(f"批量获取歌词失败: {str(e)}", 500)
+
+
 @app.route('/api/info', methods=['GET'])
 def api_info():
     """API信息接口"""
@@ -1460,7 +1491,7 @@ def api_info():
             },
             'supported_qualities': [
                 'standard', 'exhigh', 'lossless', 
-                'hires', 'sky', 'jyeffect', 'jymaster'
+                'hires', 'sky', 'dolby', 'jyeffect', 'jymaster'
             ],
             'config': {
                 'downloads_dir': str(api_service.downloads_path.absolute()),

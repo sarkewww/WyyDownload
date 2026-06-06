@@ -1,0 +1,4 @@
+*.css -text
+*.js -text
+*.min.css -text
+*.min.js -text

@@ -216,7 +216,7 @@ class CookieManager:
             return False
     
     def is_cookie_valid(self) -> bool:
-        """检查Cookie是否有效
+        """检查Cookie结构是否完整（仅验证格式，不调API验证时效性）
         
         Returns:
             Cookie是否有效

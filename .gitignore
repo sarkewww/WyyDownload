@@ -10,6 +10,7 @@ __pycache__
 *.pyd
 
 downloads/
+dl_history.json
 music_api.log
 cookie.txt
 *.har

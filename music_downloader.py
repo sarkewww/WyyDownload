@@ -85,6 +85,22 @@ class MusicDownloader:
         # 初始化依赖
         self.cookie_manager = CookieManager()
         self.api = NeteaseAPI()
+        self._cover_cache: Dict[str, bytes] = {}  # URL -> bytes
+
+    def _fetch_cover(self, pic_url: str) -> Optional[bytes]:
+        if not pic_url:
+            return None
+        if pic_url in self._cover_cache:
+            return self._cover_cache[pic_url]
+        try:
+            r = requests.get(pic_url, timeout=10)
+            r.raise_for_status()
+            self._cover_cache[pic_url] = r.content
+            if len(self._cover_cache) > 500:
+                self._cover_cache.pop(next(iter(self._cover_cache)))
+            return r.content
+        except Exception:
+            return None
     
     def _sanitize_filename(self, filename: str) -> str:
         """清理文件名，移除非法字符
@@ -137,7 +153,7 @@ class MusicDownloader:
         
         return '.mp3'  # 默认
     
-    def get_music_info(self, music_id: int, quality: str = "standard") -> MusicInfo:
+    def get_music_info(self, music_id: int, quality: str = "standard", cookies: Dict[str, str] = None) -> MusicInfo:
         """获取音乐详细信息
         
         Args:
@@ -152,7 +168,8 @@ class MusicDownloader:
         """
         try:
             # 获取cookies
-            cookies = self.cookie_manager.parse_cookies()
+            if cookies is None:
+                cookies = self.cookie_manager.parse_cookies()
             
             # 获取音乐URL信息
             url_result = self.api.get_song_url(music_id, quality, cookies)
@@ -204,7 +221,8 @@ class MusicDownloader:
             raise DownloadException(f"获取音乐信息时发生错误: {e}")
     
     def download_music_file(self, music_id: int, quality: str = "standard",
-                            progress_callback: Callable[[int, int, int], None] = None) -> DownloadResult:
+                            progress_callback: Callable[[int, int, int], None] = None,
+                            cookies: Dict[str, str] = None) -> DownloadResult:
         """下载音乐文件到本地（支持断点续传）
         
         Args:
@@ -213,10 +231,10 @@ class MusicDownloader:
             progress_callback: 进度回调 callback(downloaded, total_size, speed)
         """
         try:
-            music_info = self.get_music_info(music_id, quality)
+            music_info = self.get_music_info(music_id, quality, cookies)
             filename = f"{music_info.artists} - {music_info.name}"
             safe_filename = self._sanitize_filename(filename)
-            file_ext = self._determine_file_extension(music_info.download_url)
+            file_ext = self._determine_file_extension(music_info.download_url, music_info.file_type)
             file_path = self.download_dir / f"{safe_filename}{file_ext}"
             part_path = file_path.with_suffix(file_path.suffix + '.part')
             
@@ -279,6 +297,10 @@ class MusicDownloader:
                 if file_path.exists():
                     file_path.unlink()
                 part_path.rename(file_path)
+
+            if file_path.stat().st_size == 0:
+                file_path.unlink(missing_ok=True)
+                return DownloadResult(success=False, error_message="下载文件为空，请重试")
             
             self._write_music_tags(file_path, music_info)
             return DownloadResult(success=True, file_path=str(file_path),
@@ -325,18 +347,15 @@ class MusicDownloader:
             
             # 下载并添加封面
             if music_info.pic_url:
-                try:
-                    pic_response = requests.get(music_info.pic_url, timeout=10)
-                    pic_response.raise_for_status()
+                cover_data = self._fetch_cover(music_info.pic_url)
+                if cover_data:
                     audio.tags.add(APIC(
                         encoding=3,
                         mime='image/jpeg',
                         type=3,
                         desc='Cover',
-                        data=pic_response.content
+                        data=cover_data
                     ))
-                except:
-                    pass  # 封面下载失败不影响主流程
             
             audio.save()
         except Exception as e:
@@ -354,21 +373,16 @@ class MusicDownloader:
             if music_info.track_number > 0:
                 audio['TRACKNUMBER'] = str(music_info.track_number)
             
-            # 下载并添加封面
             if music_info.pic_url:
-                try:
-                    pic_response = requests.get(music_info.pic_url, timeout=10)
-                    pic_response.raise_for_status()
-                    
+                cover_data = self._fetch_cover(music_info.pic_url)
+                if cover_data:
                     from mutagen.flac import Picture
                     picture = Picture()
-                    picture.type = 3  # Cover (front)
+                    picture.type = 3
                     picture.mime = 'image/jpeg'
                     picture.desc = 'Cover'
-                    picture.data = pic_response.content
+                    picture.data = cover_data
                     audio.add_picture(picture)
-                except:
-                    pass  # 封面下载失败不影响主流程
             
             audio.save()
         except Exception as e:
@@ -386,14 +400,10 @@ class MusicDownloader:
             if music_info.track_number > 0:
                 audio['trkn'] = [(music_info.track_number, 0)]
             
-            # 下载并添加封面
             if music_info.pic_url:
-                try:
-                    pic_response = requests.get(music_info.pic_url, timeout=10)
-                    pic_response.raise_for_status()
-                    audio['covr'] = [pic_response.content]
-                except:
-                    pass  # 封面下载失败不影响主流程
+                cover_data = self._fetch_cover(music_info.pic_url)
+                if cover_data:
+                    audio['covr'] = [cover_data]
             
             audio.save()
         except Exception as e:

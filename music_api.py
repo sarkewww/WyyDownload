@@ -14,12 +14,16 @@ import base64
 import hashlib
 import urllib.parse
 import time
+import threading
 from random import randrange
 from typing import Dict, List, Optional, Tuple, Any
 from hashlib import md5
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -54,13 +58,6 @@ class APIConstants:
     QR_LOGIN_API = 'https://interface3.music.163.com/eapi/login/qrcode/client/login'
     
     # 默认配置
-    DEFAULT_CONFIG = {
-        "os": "pc",
-        "appver": "",
-        "osver": "",
-        "deviceId": "pyncm!"
-    }
-    
     DEFAULT_COOKIES = {
         "os": "pc",
         "appver": "",
@@ -104,8 +101,22 @@ class CryptoUtils:
 
 
 class HTTPClient:
-    """HTTP客户端类"""
-    
+    """HTTP客户端类（共享 Session + 重试）"""
+    _session = None
+    _session_lock = threading.Lock()
+
+    @classmethod
+    def _get_session(cls) -> requests.Session:
+        if cls._session is None:
+            with cls._session_lock:
+                if cls._session is None:
+                    cls._session = requests.Session()
+                    retry = Retry(total=2, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+                    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=20)
+                    cls._session.mount('https://', adapter)
+                    cls._session.mount('http://', adapter)
+        return cls._session
+
     @staticmethod
     def post_request(url: str, params: str, cookies: Dict[str, str]) -> str:
         """发送POST请求并返回文本响应"""
@@ -113,18 +124,18 @@ class HTTPClient:
             'User-Agent': APIConstants.USER_AGENT,
             'Referer': APIConstants.REFERER,
         }
-        
+
         request_cookies = APIConstants.DEFAULT_COOKIES.copy()
         request_cookies.update(cookies)
-        
+
         try:
-            response = requests.post(url, headers=headers, cookies=request_cookies, 
+            response = HTTPClient._get_session().post(url, headers=headers, cookies=request_cookies,
                                    data={"params": params}, timeout=30)
             response.raise_for_status()
             return response.text
         except requests.RequestException as e:
             raise APIException(f"HTTP请求失败: {e}")
-    
+
     @staticmethod
     def post_request_full(url: str, params: str, cookies: Dict[str, str]) -> requests.Response:
         """发送POST请求并返回完整响应对象"""
@@ -132,12 +143,12 @@ class HTTPClient:
             'User-Agent': APIConstants.USER_AGENT,
             'Referer': APIConstants.REFERER,
         }
-       
+
         request_cookies = APIConstants.DEFAULT_COOKIES.copy()
         request_cookies.update(cookies)
-       
+
         try:
-            response = requests.post(url, headers=headers, cookies=request_cookies, 
+            response = HTTPClient._get_session().post(url, headers=headers, cookies=request_cookies,
                                    data={"params": params}, timeout=30)
             response.raise_for_status()
             return response
@@ -172,7 +183,7 @@ class NeteaseAPI:
             APIException: API调用失败时抛出
         """
         try:
-            config = APIConstants.DEFAULT_CONFIG.copy()
+            config = APIConstants.DEFAULT_COOKIES.copy()
             config["requestId"] = str(randrange(20000000, 30000000))
             
             payload = {
@@ -295,7 +306,7 @@ class NeteaseAPI:
             songs = []
             raw = result.get('result', {})
 
-            if search_type in (1,):  # 歌曲
+            if search_type in (1, '1'):  # 歌曲
                 for item in raw.get('songs', []):
                     songs.append({
                         'id': item['id'],
@@ -305,7 +316,7 @@ class NeteaseAPI:
                         'picUrl': item.get('al', {}).get('picUrl', ''),
                     })
 
-            elif search_type == 10:  # 专辑
+            elif search_type == 10 or search_type == '10':  # 专辑
                 for item in raw.get('albums', []):
                     songs.append({
                         'id': item['id'],
@@ -313,9 +324,10 @@ class NeteaseAPI:
                         'artists': item.get('artist', {}).get('name', ''),
                         'album': item.get('company', ''),
                         'picUrl': item.get('picUrl', '') or item.get('pic', ''),
+                        'size': item.get('size', 0),
                     })
 
-            elif search_type == 100:  # 歌手
+            elif search_type == 100 or search_type == '100':  # 歌手
                 for item in raw.get('artists', []):
                     songs.append({
                         'id': item['id'],
@@ -325,7 +337,7 @@ class NeteaseAPI:
                         'picUrl': item.get('img1v1Url', '') or item.get('picUrl', ''),
                     })
 
-            elif search_type == 1000:  # 歌单
+            elif search_type == 1000 or search_type == '1000':  # 歌单
                 for item in raw.get('playlists', []):
                     songs.append({
                         'id': item['id'],
@@ -333,6 +345,7 @@ class NeteaseAPI:
                         'artists': item.get('creator', {}).get('nickname', ''),
                         'album': f"{item.get('trackCount', 0)} 首",
                         'picUrl': item.get('coverImgUrl', ''),
+                        'trackCount': item.get('trackCount', 0),
                     })
 
             return songs
@@ -341,28 +354,6 @@ class NeteaseAPI:
         except (json.JSONDecodeError, KeyError) as e:
             raise APIException(f"解析搜索响应失败: {e}")
     
-    def batch_get_song_urls(self, song_ids: List[int], quality: str, cookies: Dict[str, str]) -> List[Dict[str, Any]]:
-        """批量获取歌曲播放URL"""
-        results = []
-        for song_id in song_ids:
-            try:
-                result = self.get_song_url(song_id, quality, cookies)
-                if result and result.get('data') and len(result['data']) > 0:
-                    song_data = result['data'][0]
-                    results.append({
-                        'id': song_data.get('id', song_id),
-                        'url': song_data.get('url', ''),
-                        'level': song_data.get('level', quality),
-                        'size': song_data.get('size', 0),
-                        'type': song_data.get('type', ''),
-                        'br': song_data.get('br', 0),
-                    })
-                else:
-                    results.append({'id': song_id, 'url': '', 'level': quality, 'size': 0, 'type': '', 'br': 0})
-            except Exception:
-                results.append({'id': song_id, 'url': '', 'level': quality, 'size': 0, 'type': '', 'br': 0})
-        return results
-
     def get_playlist_detail(self, playlist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
         """获取歌单详情
         
@@ -402,25 +393,39 @@ class NeteaseAPI:
                 'tracks': []
             }
             
-            # 获取所有trackIds并分批获取详细信息
+            # 获取所有trackIds并分批获取详细信息（并发）
             track_ids = [str(t['id']) for t in playlist.get('trackIds', [])]
-            for i in range(0, len(track_ids), 100):
-                batch_ids = track_ids[i:i+100]
+            batches = [track_ids[i:i+100] for i in range(0, len(track_ids), 100)]
+            if not batches:
+                return info
+
+            def _fetch_batch(batch_ids):
                 song_data = {'c': json.dumps([{'id': int(sid), 'v': 0} for sid in batch_ids])}
-                
-                song_resp = requests.post(APIConstants.SONG_DETAIL_V3, data=song_data, 
-                                        headers=headers, cookies=cookies, timeout=30)
-                song_resp.raise_for_status()
-                
-                song_result = song_resp.json()
-                for song in song_result.get('songs', []):
-                    info['tracks'].append({
-                        'id': song['id'],
-                        'name': song['name'],
-                        'artists': '/'.join(artist['name'] for artist in song['ar']),
-                        'album': song['al']['name'],
-                        'picUrl': song['al']['picUrl'],
-                        'duration': song.get('dt', 0),
+                try:
+                    song_resp = requests.post(APIConstants.SONG_DETAIL_V3, data=song_data,
+                                            headers=headers, cookies=cookies, timeout=30)
+                    song_resp.raise_for_status()
+                    return song_resp.json().get('songs', [])
+                except Exception:
+                    return []
+
+            all_songs = []
+            with ThreadPoolExecutor(max_workers=min(5, len(batches))) as executor:
+                futures = [executor.submit(_fetch_batch, b) for b in batches]
+                for future in as_completed(futures):
+                    try:
+                        all_songs.extend(future.result())
+                    except Exception:
+                        pass
+
+            for song in sorted(all_songs, key=lambda s: track_ids.index(str(s.get('id'))) if str(s.get('id')) in track_ids else 99999):
+                info['tracks'].append({
+                    'id': song.get('id'),
+                    'name': song.get('name', ''),
+                    'artists': '/'.join(a.get('name', '') for a in (song.get('ar') or [])),
+                    'album': (song.get('al') or {}).get('name', ''),
+                    'picUrl': (song.get('al') or {}).get('picUrl', ''),
+                    'duration': song.get('dt', 0),
                     })
             
             return info
@@ -528,7 +533,7 @@ class QRLoginManager:
             APIException: API调用失败时抛出
         """
         try:
-            config = APIConstants.DEFAULT_CONFIG.copy()
+            config = APIConstants.DEFAULT_COOKIES.copy()
             config["requestId"] = str(randrange(20000000, 30000000))
             
             payload = {
@@ -590,7 +595,7 @@ class QRLoginManager:
             APIException: API调用失败时抛出
         """
         try:
-            config = APIConstants.DEFAULT_CONFIG.copy()
+            config = APIConstants.DEFAULT_COOKIES.copy()
             config["requestId"] = str(randrange(20000000, 30000000))
             
             payload = {
@@ -677,10 +682,6 @@ def playlist_detail(playlist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]
 
 def album_detail(album_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
     return _api.get_album_detail(album_id, cookies)
-
-
-def batch_song_urls(song_ids: List[int], quality: str, cookies: Dict[str, str]) -> List[Dict[str, Any]]:
-    return _api.batch_get_song_urls(song_ids, quality, cookies)
 
 
 def get_pic_url(pic_id: Optional[int], size: int = 300) -> str:
