@@ -6,6 +6,8 @@
 - 歌单和专辑详情
 - 音乐下载
 - 健康检查
+
+项目基于 https://github.com/Suxiaoqinx 的 https://github.com/Suxiaoqinx/Netease_url 二次开发
 """
 
 import logging
