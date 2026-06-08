@@ -13,4 +13,7 @@ downloads/
 dl_history.json
 music_api.log
 cookie.txt
+qqcookie.txt
 *.har
+sample/
+main.db
