@@ -4,7 +4,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
-from main import safe_filename, ILLEGAL_CHARS
+from music_downloader import safe_filename, ILLEGAL_CHARS, format_speed, format_eta
 
 
 class TestSafeFilename(unittest.TestCase):
@@ -31,17 +31,15 @@ class TestSafeFilename(unittest.TestCase):
 
 class TestFormatFunctions(unittest.TestCase):
     def test_format_speed(self):
-        from main import _format_speed
-        self.assertEqual(_format_speed(0), "0 B/s")
-        self.assertEqual(_format_speed(1024), "1.0 KB/s")
-        self.assertEqual(_format_speed(1048576), "1.0 MB/s")
+        self.assertEqual(format_speed(0), "0 B/s")
+        self.assertEqual(format_speed(1024), "1.0 KB/s")
+        self.assertEqual(format_speed(1048576), "1.0 MB/s")
 
     def test_format_eta(self):
-        from main import _format_eta
-        self.assertEqual(_format_eta(-1), "--")
-        self.assertEqual(_format_eta(0), "0秒")
-        self.assertEqual(_format_eta(65), "1分5秒")
-        self.assertEqual(_format_eta(3661), "1时1分")
+        self.assertEqual(format_eta(-1), "--")
+        self.assertEqual(format_eta(0), "0秒")
+        self.assertEqual(format_eta(65), "1分5秒")
+        self.assertEqual(format_eta(3661), "1时1分")
 
 
 if __name__ == "__main__":

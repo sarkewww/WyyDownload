@@ -12,6 +12,8 @@ __pycache__
 downloads/
 dl_history.json
 music_api.log
+data.db
+cookie/
 cookie.txt
 qqcookie.txt
 *.har

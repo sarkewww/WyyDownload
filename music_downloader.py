@@ -1,20 +1,30 @@
 """音乐下载器模块
 
-提供网易云音乐下载功能，包括：
+提供网易云音乐下载及批量任务管理功能，包括：
+- 通用工具函数（文件名安全处理、速度/时间格式化、歌词合并、ZIP打包等）
 - 音乐信息获取
-- 文件下载到本地
-- 内存下载
+- 文件下载到本地（支持断点续传）
 - 音乐标签写入
-- 异步下载支持
+- 多线程批量下载任务管理
 """
 
-import os
 import re
+import os
+import sqlite3
 import time
+import logging
+import threading
+import uuid
+import atexit
+import zipfile
+import shutil
+import tempfile
+from io import BytesIO
 from typing import Dict, List, Optional, Tuple, Any, Union, Callable
 from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from mutagen.flac import FLAC
@@ -24,6 +34,79 @@ from mutagen.mp4 import MP4
 
 from music_api import NeteaseAPI, APIException
 from cookie_manager import CookieManager
+
+
+# ==================== 通用工具函数 ====================
+
+VALID_LEVELS = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'dolby', 'jyeffect', 'jymaster']
+ILLEGAL_CHARS = r'<>:"/\|?*'
+
+
+def safe_filename(name: str) -> str:
+    return ''.join(c for c in (name or 'file') if c not in ILLEGAL_CHARS)
+
+
+def format_speed(bytes_per_sec: int) -> str:
+    if bytes_per_sec >= 1024 * 1024:
+        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+    elif bytes_per_sec >= 1024:
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    return f"{bytes_per_sec} B/s"
+
+
+def format_eta(seconds: float) -> str:
+    if seconds < 0:
+        return "--"
+    if seconds < 60:
+        return f"{int(seconds)}秒"
+    if seconds < 3600:
+        return f"{int(seconds) // 60}分{int(seconds) % 60}秒"
+    h = int(seconds) // 3600
+    m = (int(seconds) % 3600) // 60
+    return f"{h}时{m}分"
+
+
+def merge_translation_lyric(lrc: str, tlyric: str) -> str:
+    if not tlyric:
+        return lrc
+
+    def parse_time_tag(line: str):
+        m = re.match(r'\[(\d+):(\d+[\.:]?\d*)\]', line)
+        if m:
+            return int(m.group(1)) * 60 + float(m.group(2).replace(':', '.'))
+        return None
+
+    lrc_lines = lrc.strip().split('\n')
+    tlyric_lines = tlyric.strip().split('\n')
+    tlyric_map = {}
+    for line in tlyric_lines:
+        t = parse_time_tag(line)
+        if t is not None:
+            text = re.sub(r'\[\d+:\d+[\.:]?\d*\]', '', line).strip()
+            tlyric_map[t] = text
+    result = []
+    for line in lrc_lines:
+        t = parse_time_tag(line)
+        text = re.sub(r'\[\d+:\d+[\.:]?\d*\]', '', line).strip()
+        if t is not None and t in tlyric_map and tlyric_map[t]:
+            tag = re.match(r'(\[\d+:\d+[\.:]?\d*\])', line)
+            if tag:
+                result.append(f"{tag.group(1)}{text} (翻译: {tlyric_map[t]})")
+                continue
+        result.append(line)
+    return '\n'.join(result)
+
+
+def make_zip_response(files_dir: Path, zip_name: str) -> Tuple[BytesIO, str]:
+    zip_buf = BytesIO()
+    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(files_dir.iterdir()):
+            zf.write(str(f), f.name)
+    zip_buf.seek(0)
+    return zip_buf, safe_filename(zip_name) + '.zip'
+
+
+# ==================== 音乐下载相关类 ====================
 
 
 class AudioFormat(Enum):
@@ -233,9 +316,9 @@ class MusicDownloader:
         try:
             music_info = self.get_music_info(music_id, quality, cookies)
             filename = f"{music_info.artists} - {music_info.name}"
-            safe_filename = self._sanitize_filename(filename)
+            sfilename = self._sanitize_filename(filename)
             file_ext = self._determine_file_extension(music_info.download_url, music_info.file_type)
-            file_path = self.download_dir / f"{safe_filename}{file_ext}"
+            file_path = self.download_dir / f"{sfilename}{file_ext}"
             part_path = file_path.with_suffix(file_path.suffix + '.part')
             
             if file_path.exists():
@@ -410,9 +493,319 @@ class MusicDownloader:
             print(f"写入M4A标签失败: {e}")
 
 
+# ==================== 批量下载任务管理器 ====================
+
+_batch_logger = logging.getLogger('batch_manager')
+
+
+class BatchTaskManager:
+    """批量下载任务管理器（多线程）"""
+
+    TTL_SECONDS = 3600
+
+    def __init__(self, downloader):
+        self.downloader = downloader
+        self.tasks: Dict[str, Dict] = {}
+        self.lock = threading.Lock()
+        self.executor = ThreadPoolExecutor(max_workers=5)
+        atexit.register(self.shutdown)
+
+    def shutdown(self):
+        self.executor.shutdown(wait=False)
+
+    def _cleanup_expired(self):
+        now = time.time()
+        expired = [tid for tid, t in self.tasks.items()
+                   if t['status'] in ('completed', 'failed', 'cancelled')
+                   and now - t.get('start_time', now) > self.TTL_SECONDS]
+        for tid in expired:
+            self.tasks.pop(tid, None)
+
+    def create_task(self, tracks: List[Dict], playlist_info: Dict, level: str, cookies: Dict) -> str:
+        task_id = str(uuid.uuid4())[:8]
+        task = {
+            'task_id': task_id, 'status': 'running',
+            'total': len(tracks), 'completed': 0, 'failed': 0, 'success': 0,
+            'current_file': '', 'current_index': 0,
+            'downloaded_bytes': 0, 'total_bytes': 0, 'speed': 0,
+            'errors': [], 'files': [], 'playlist_info': playlist_info,
+            'level': level, 'cookies': cookies,
+            '_pre_sizes': {}, 'start_time': time.time(),
+        }
+        with self.lock:
+            self._cleanup_expired()
+            self.tasks[task_id] = task
+        self.executor.submit(self._run_download, task_id, tracks)
+        return task_id
+
+    def _run_download(self, task_id: str, tracks: List[Dict]):
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return
+        level = task['level']
+        task['_cancelled'] = False
+        downloader = self.downloader
+        _batch_logger.info(f"[DL-TASK-{task_id}] starting download, {len(tracks)} tracks")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            with ThreadPoolExecutor(max_workers=3) as dl_executor:
+                futures = []
+                for i, track in enumerate(tracks):
+                    sid = track['id']
+                    safe_name = f"{i + 1:03d}. {track['artists']} - {track['name']}"
+                    safe_name = ''.join(c for c in safe_name if c not in r'<>:"/\|?*')
+                    future = dl_executor.submit(
+                        self._download_one, task_id, i, track, sid, safe_name, level, tmp_path, downloader)
+                    futures.append(future)
+                for future in as_completed(futures):
+                    if task.get('_cancelled'):
+                        break
+                    try:
+                        future.result()
+                    except Exception:
+                        _batch_logger.error(f"[DL-TASK-{task_id}] unexpected download error", exc_info=True)
+            pl_name = task['playlist_info'].get('name', 'playlist')
+            pl_creator = task['playlist_info'].get('creator', '')
+            success_count = task.get('success', 0)
+            _batch_logger.info(f"[DL-TASK-{task_id}] all completed: {success_count}/{task.get('total')}")
+            zip_buffer = None
+            files_count = 0
+            zip_size = 0
+            if success_count > 0:
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    files_in_tmp = sorted(tmp_path.iterdir())
+                    files_count = len(files_in_tmp)
+                    for f in files_in_tmp:
+                        zf.write(str(f), f.name)
+                zip_buffer.seek(0)
+                zip_size = zip_buffer.getbuffer().nbytes
+            with self.lock:
+                t = self.tasks.get(task_id)
+                if t is None:
+                    return
+                if success_count > 0:
+                    t['zip_buffer'] = zip_buffer
+                    t['zip_filename'] = safe_filename(f"{pl_name}-{pl_creator}").strip('-') + '.zip'
+                    t['status'] = 'completed'
+                    _batch_logger.info(f"[DL-TASK-{task_id}] ZIP created: {files_count} files, {zip_size} bytes")
+                else:
+                    t['status'] = 'failed'
+
+    def _download_one(self, task_id, idx, track, sid, safe_name, level, tmp_path, downloader):
+        with self.lock:
+            t = self.tasks.get(task_id)
+        if t is None:
+            return False, None
+        with self.lock:
+            t['current_index'] = idx + 1
+            t['current_file'] = f"{track['artists']} - {track['name']}"
+
+        def progress_cb(downloaded, total_size, speed):
+            with self.lock:
+                tsk = self.tasks.get(task_id)
+                if tsk is None:
+                    return
+                tsk['speed'] = speed
+                prev = tsk.get(f'_lb_{idx}', 0)
+                if downloaded > prev:
+                    tsk['downloaded_bytes'] = tsk.get('downloaded_bytes', 0) + (downloaded - prev)
+                    tsk[f'_lb_{idx}'] = downloaded
+                ps = tsk.get('_pre_sizes', {})
+                ps[idx] = total_size
+                tsk['_pre_sizes'] = ps
+                tsk['total_bytes'] = max(tsk['total_bytes'], sum(ps.values()))
+                fp = tsk.get('_file_progress', {})
+                fp[idx] = {'name': f"{track['artists']} - {track['name']}", 'downloaded': downloaded, 'total': total_size, 'status': 'downloading'}
+                tsk['_file_progress'] = fp
+
+        try:
+            result = downloader.download_music_file(sid, level, progress_callback=progress_cb, cookies=t.get('cookies'))
+            if result.success and result.file_path:
+                src = Path(result.file_path)
+                dst = tmp_path / f"{safe_name}{src.suffix}"
+                shutil.copy2(str(src), str(dst))
+                fs = dst.stat().st_size
+                with self.lock:
+                    tsk = self.tasks.get(task_id)
+                    if tsk:
+                        tsk['success'] += 1
+                        tsk['completed'] += 1
+                        tsk['files'].append({'name': f"{safe_name}{src.suffix}", 'size': fs})
+                        fp = tsk.get('_file_progress', {})
+                        if idx in fp: fp[idx]['status'] = 'done'
+                return True, result
+            else:
+                err_msg = result.error_message or '未知错误'
+                with self.lock:
+                    tsk = self.tasks.get(task_id)
+                    if tsk:
+                        tsk['failed'] += 1
+                        tsk['completed'] += 1
+                        tsk['errors'].append({'index': idx + 1, 'name': track['name'], 'reason': err_msg})
+                        fp = tsk.get('_file_progress', {})
+                        if idx in fp: fp[idx]['status'] = 'failed'
+                return False, result
+        except Exception as e:
+            with self.lock:
+                tsk = self.tasks.get(task_id)
+                if tsk:
+                    tsk['failed'] += 1
+                    tsk['completed'] += 1
+                    tsk['errors'].append({'index': idx + 1, 'name': track['name'], 'reason': str(e)})
+            return False, None
+
+    def get_progress(self, task_id: str) -> Optional[Dict]:
+        with self.lock:
+            self._cleanup_expired()
+            task = self.tasks.get(task_id)
+            if not task:
+                return None
+            elapsed = time.time() - task['start_time']
+            avg_speed = int(task['downloaded_bytes'] / elapsed) if elapsed > 0 else 0
+            remaining_bytes = max(0, task['total_bytes'] - task['downloaded_bytes'])
+            eta = remaining_bytes / avg_speed if avg_speed > 0 and task['total_bytes'] > 0 else -1
+            return {
+                'task_id': task['task_id'], 'status': task['status'],
+                'total': task['total'], 'completed': task['completed'],
+                'success': task['success'], 'failed': task['failed'],
+                'current_index': task['current_index'], 'current_file': task['current_file'],
+                'downloaded_bytes': task['downloaded_bytes'], 'total_bytes': task['total_bytes'],
+                'speed': task['speed'], 'errors': task['errors'],
+                'speed_formatted': format_speed(task['speed']),
+                'avg_speed_formatted': format_speed(avg_speed),
+                'eta_formatted': format_eta(eta),
+                'percent': round(task['completed'] / task['total'] * 100, 1) if task['total'] > 0 else 0,
+                'files_progress': list(task.get('_file_progress', {}).values()),
+            }
+
+    def get_result(self, task_id: str) -> Optional[tuple]:
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task or task['status'] != 'completed':
+                return None
+            return task.get('zip_buffer'), task.get('zip_filename'), task
+
+    def cleanup(self, task_id: str):
+        with self.lock:
+            self.tasks.pop(task_id, None)
+
+    def cancel(self, task_id: str) -> bool:
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if task and task['status'] == 'running':
+                task['_cancelled'] = True
+                task['status'] = 'cancelled'
+                return True
+            return False
+
+
+class Database:
+    """SQLite 数据库管理类"""
+
+    def __init__(self, db_path: str = 'data.db'):
+        self._db_path = db_path
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _execute(self, sql: str, params=(), commit: bool = True):
+        with self._lock:
+            conn = self._conn()
+            try:
+                cur = conn.execute(sql, params)
+                if commit:
+                    conn.commit()
+                return cur
+            finally:
+                conn.close()
+
+    def _init_db(self):
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS download_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                song_id TEXT NOT NULL,
+                quality TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                search_type TEXT DEFAULT '1',
+                created_at TEXT NOT NULL
+            )
+        """)
+
+    def _trim(self, table: str, max_rows: int):
+        conn = self._conn()
+        try:
+            row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()
+            if row['cnt'] > max_rows:
+                conn.execute(
+                    f"DELETE FROM {table} WHERE id NOT IN (SELECT id FROM {table} ORDER BY id DESC LIMIT ?)",
+                    (max_rows,)
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+    def add_download(self, name: str, song_id: str, quality: str = ''):
+        self._execute(
+            "INSERT INTO download_history (name, song_id, quality, created_at) VALUES (?, ?, ?, ?)",
+            (name, str(song_id), quality, time.strftime('%Y-%m-%d %H:%M:%S'))
+        )
+        self._trim('download_history', 50)
+
+    def get_downloads(self, limit: int = 50) -> list:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT name, song_id, quality, created_at FROM download_history ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [{'name': r['name'], 'song_id': r['song_id'],
+                     'quality': r['quality'], 'time': r['created_at']} for r in rows]
+        finally:
+            conn.close()
+
+    def clear_downloads(self):
+        self._execute("DELETE FROM download_history")
+
+    def add_search(self, keyword: str, search_type: str = '1'):
+        self._execute(
+            "INSERT INTO search_history (keyword, search_type, created_at) VALUES (?, ?, ?)",
+            (keyword, search_type, time.strftime('%Y-%m-%d %H:%M:%S'))
+        )
+        self._trim('search_history', 50)
+
+    def get_searches(self, limit: int = 50) -> list:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT keyword, search_type, created_at FROM search_history ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [{'keyword': r['keyword'], 'type': r['search_type'],
+                     'time': r['created_at']} for r in rows]
+        finally:
+            conn.close()
+
+    def clear_searches(self):
+        self._execute("DELETE FROM search_history")
+
+
 if __name__ == "__main__":
     downloader = MusicDownloader()
     print("音乐下载器模块")
     print("支持的功能:")
     print("- 音乐下载")
     print("- 音乐标签写入")
+    print("- 批量下载任务管理")

@@ -10,17 +10,12 @@
 项目基于 https://github.com/Suxiaoqinx 的 https://github.com/Suxiaoqinx/Netease_url 二次开发
 """
 
-import logging
 import json
-import re
+import logging
 import sys
 import time
-import atexit
 import threading
-import uuid
 import traceback
-import zipfile
-import shutil
 import tempfile
 import requests
 from io import BytesIO
@@ -38,7 +33,10 @@ try:
         playlist_detail, album_detail
     )
     from cookie_manager import CookieManager, CookieException
-    from music_downloader import MusicDownloader, DownloadException
+    from music_downloader import (
+        MusicDownloader, DownloadException, BatchTaskManager, Database,
+        safe_filename, merge_translation_lyric, make_zip_response, VALID_LEVELS
+    )
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有依赖模块存在且可用")
@@ -219,282 +217,9 @@ config = APIConfig()
 app = Flask(__name__, static_folder='templates/static')
 api_service = MusicAPIService(config)
 
-
-def _format_speed(bytes_per_sec: int) -> str:
-    """格式化下载速度"""
-    if bytes_per_sec >= 1024 * 1024:
-        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
-    elif bytes_per_sec >= 1024:
-        return f"{bytes_per_sec / 1024:.1f} KB/s"
-    return f"{bytes_per_sec} B/s"
-
-
-def _format_eta(seconds: float) -> str:
-    """格式化预计剩余时间"""
-    if seconds < 0:
-        return "--"
-    if seconds < 60:
-        return f"{int(seconds)}秒"
-    if seconds < 3600:
-        return f"{int(seconds) // 60}分{int(seconds) % 60}秒"
-    h = int(seconds) // 3600
-    m = (int(seconds) % 3600) // 60
-    return f"{h}时{m}分"
-
-
-def _merge_translation_lyric(lrc: str, tlyric: str) -> str:
-    """合并翻译歌词"""
-    if not tlyric:
-        return lrc
-
-    def parse_time_tag(line: str):
-        m = re.match(r'\[(\d+):(\d+[\.:]?\d*)\]', line)
-        if m:
-            return int(m.group(1)) * 60 + float(m.group(2).replace(':', '.'))
-        return None
-
-    lrc_lines = lrc.strip().split('\n')
-    tlyric_lines = tlyric.strip().split('\n')
-    tlyric_map = {}
-    for line in tlyric_lines:
-        t = parse_time_tag(line)
-        if t is not None:
-            text = re.sub(r'\[\d+:\d+[\.:]?\d*\]', '', line).strip()
-            tlyric_map[t] = text
-    result = []
-    for line in lrc_lines:
-        t = parse_time_tag(line)
-        text = re.sub(r'\[\d+:\d+[\.:]?\d*\]', '', line).strip()
-        if t is not None and t in tlyric_map and tlyric_map[t]:
-            tag = re.match(r'(\[\d+:\d+[\.:]?\d*\])', line)
-            if tag:
-                result.append(f"{tag.group(1)}{text} (翻译: {tlyric_map[t]})")
-                continue
-        result.append(line)
-    return '\n'.join(result)
-
-
-class BatchTaskManager:
-    """批量下载任务管理器（多线程）"""
-
-    TTL_SECONDS = 3600  # 任务完成后 60 分钟自动清理
-
-    def __init__(self, downloader):
-        self.downloader = downloader
-        self.tasks: Dict[str, Dict] = {}
-        self.lock = threading.Lock()
-        self.executor = ThreadPoolExecutor(max_workers=5)
-        atexit.register(self.shutdown)
-
-    def shutdown(self):
-        self.executor.shutdown(wait=False)
-
-    def _cleanup_expired(self):
-        now = time.time()
-        expired = [tid for tid, t in self.tasks.items()
-                   if t['status'] in ('completed', 'failed', 'cancelled')
-                   and now - t.get('start_time', now) > self.TTL_SECONDS]
-        for tid in expired:
-            self.tasks.pop(tid, None)
-
-    def create_task(self, tracks: List[Dict], playlist_info: Dict, level: str, cookies: Dict) -> str:
-        task_id = str(uuid.uuid4())[:8]
-        task = {
-            'task_id': task_id, 'status': 'running',
-            'total': len(tracks), 'completed': 0, 'failed': 0, 'success': 0,
-            'current_file': '', 'current_index': 0,
-            'downloaded_bytes': 0, 'total_bytes': 0, 'speed': 0,
-            'errors': [], 'files': [], 'playlist_info': playlist_info,
-            'level': level, 'cookies': cookies,
-            '_pre_sizes': {}, 'start_time': time.time(),
-        }
-        with self.lock:
-            self._cleanup_expired()
-            self.tasks[task_id] = task
-        self.executor.submit(self._run_download, task_id, tracks)
-        return task_id
-
-    def _run_download(self, task_id: str, tracks: List[Dict]):
-        with self.lock:
-            task = self.tasks.get(task_id)
-            if not task:
-                return
-        level = task['level']
-        task['_cancelled'] = False
-        downloader = self.downloader
-        api_service.logger.info(f"[DL-TASK-{task_id}] starting download, {len(tracks)} tracks")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            with ThreadPoolExecutor(max_workers=3) as dl_executor:
-                futures = []
-                for i, track in enumerate(tracks):
-                    sid = track['id']
-                    safe_name = f"{i + 1:03d}. {track['artists']} - {track['name']}"
-                    safe_name = ''.join(c for c in safe_name if c not in r'<>:"/\|?*')
-                    future = dl_executor.submit(
-                        self._download_one, task_id, i, track, sid, safe_name, level, tmp_path, downloader)
-                    futures.append(future)
-                for future in as_completed(futures):
-                    if task.get('_cancelled'):
-                        break
-                    try:
-                        future.result()
-                    except Exception:
-                        api_service.logger.error(f"[DL-TASK-{task_id}] unexpected download error", exc_info=True)
-            pl_name = task['playlist_info'].get('name', 'playlist')
-            pl_creator = task['playlist_info'].get('creator', '')
-            success_count = task.get('success', 0)
-            api_service.logger.info(f"[DL-TASK-{task_id}] all completed: {success_count}/{task.get('total')}")
-            zip_buffer = None
-            files_count = 0
-            zip_size = 0
-            if success_count > 0:
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    files_in_tmp = sorted(tmp_path.iterdir())
-                    files_count = len(files_in_tmp)
-                    for f in files_in_tmp:
-                        zf.write(str(f), f.name)
-                zip_buffer.seek(0)
-                zip_size = zip_buffer.getbuffer().nbytes
-            with self.lock:
-                t = self.tasks.get(task_id)
-                if t is None:
-                    return
-                if success_count > 0:
-                    t['zip_buffer'] = zip_buffer
-                    t['zip_filename'] = safe_filename(f"{pl_name}-{pl_creator}").strip('-') + '.zip'
-                    t['status'] = 'completed'
-                    api_service.logger.info(f"[DL-TASK-{task_id}] ZIP created: {files_count} files, {zip_size} bytes")
-                else:
-                    t['status'] = 'failed'
-
-    def _download_one(self, task_id, idx, track, sid, safe_name, level, tmp_path, downloader):
-        with self.lock:
-            t = self.tasks.get(task_id)
-        if t is None:
-            return False, None
-        with self.lock:
-            t['current_index'] = idx + 1
-            t['current_file'] = f"{track['artists']} - {track['name']}"
-
-        def progress_cb(downloaded, total_size, speed):
-            with self.lock:
-                tsk = self.tasks.get(task_id)
-                if tsk is None:
-                    return
-                tsk['speed'] = speed
-                prev = tsk.get(f'_lb_{idx}', 0)
-                if downloaded > prev:
-                    tsk['downloaded_bytes'] = tsk.get('downloaded_bytes', 0) + (downloaded - prev)
-                    tsk[f'_lb_{idx}'] = downloaded
-                ps = tsk.get('_pre_sizes', {})
-                ps[idx] = total_size
-                tsk['_pre_sizes'] = ps
-                tsk['total_bytes'] = max(tsk['total_bytes'], sum(ps.values()))
-                fp = tsk.get('_file_progress', {})
-                fp[idx] = {'name': f"{track['artists']} - {track['name']}", 'downloaded': downloaded, 'total': total_size, 'status': 'downloading'}
-                tsk['_file_progress'] = fp
-
-        try:
-            result = downloader.download_music_file(sid, level, progress_callback=progress_cb, cookies=t.get('cookies'))
-            if result.success and result.file_path:
-                src = Path(result.file_path)
-                dst = tmp_path / f"{safe_name}{src.suffix}"
-                shutil.copy2(str(src), str(dst))
-                fs = dst.stat().st_size
-                with self.lock:
-                    tsk = self.tasks.get(task_id)
-                    if tsk:
-                        tsk['success'] += 1
-                        tsk['completed'] += 1
-                        tsk['files'].append({'name': f"{safe_name}{src.suffix}", 'size': fs})
-                        fp = tsk.get('_file_progress', {})
-                        if idx in fp: fp[idx]['status'] = 'done'
-                return True, result
-            else:
-                err_msg = result.error_message or '未知错误'
-                with self.lock:
-                    tsk = self.tasks.get(task_id)
-                    if tsk:
-                        tsk['failed'] += 1
-                        tsk['completed'] += 1
-                        tsk['errors'].append({'index': idx + 1, 'name': track['name'], 'reason': err_msg})
-                        fp = tsk.get('_file_progress', {})
-                        if idx in fp: fp[idx]['status'] = 'failed'
-                return False, result
-        except Exception as e:
-            with self.lock:
-                tsk = self.tasks.get(task_id)
-                if tsk:
-                    tsk['failed'] += 1
-                    tsk['completed'] += 1
-                    tsk['errors'].append({'index': idx + 1, 'name': track['name'], 'reason': str(e)})
-            return False, None
-
-    def get_progress(self, task_id: str) -> Optional[Dict]:
-        with self.lock:
-            self._cleanup_expired()
-            task = self.tasks.get(task_id)
-            if not task:
-                return None
-            elapsed = time.time() - task['start_time']
-            avg_speed = int(task['downloaded_bytes'] / elapsed) if elapsed > 0 else 0
-            remaining_bytes = max(0, task['total_bytes'] - task['downloaded_bytes'])
-            eta = remaining_bytes / avg_speed if avg_speed > 0 and task['total_bytes'] > 0 else -1
-            return {
-                'task_id': task['task_id'], 'status': task['status'],
-                'total': task['total'], 'completed': task['completed'],
-                'success': task['success'], 'failed': task['failed'],
-                'current_index': task['current_index'], 'current_file': task['current_file'],
-                'downloaded_bytes': task['downloaded_bytes'], 'total_bytes': task['total_bytes'],
-                'speed': task['speed'], 'errors': task['errors'],
-                'speed_formatted': _format_speed(task['speed']),
-                'avg_speed_formatted': _format_speed(avg_speed),
-                'eta_formatted': _format_eta(eta),
-                'percent': round(task['completed'] / task['total'] * 100, 1) if task['total'] > 0 else 0,
-                'files_progress': list(task.get('_file_progress', {}).values()),
-            }
-
-    def get_result(self, task_id: str) -> Optional[tuple]:
-        with self.lock:
-            task = self.tasks.get(task_id)
-            if not task or task['status'] != 'completed':
-                return None
-            return task.get('zip_buffer'), task.get('zip_filename'), task
-
-    def cleanup(self, task_id: str):
-        with self.lock:
-            self.tasks.pop(task_id, None)
-
-    def cancel(self, task_id: str) -> bool:
-        with self.lock:
-            task = self.tasks.get(task_id)
-            if task and task['status'] == 'running':
-                task['_cancelled'] = True
-                task['status'] = 'cancelled'
-                return True
-            return False
-
-
 batch_task_mgr = BatchTaskManager(api_service.downloader)
 qr_manager = QRLoginManager()
-
-VALID_LEVELS = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'dolby', 'jyeffect', 'jymaster']
-ILLEGAL_CHARS = r'<>:"/\|?*'
-
-
-def safe_filename(name: str) -> str:
-    return ''.join(c for c in (name or 'file') if c not in ILLEGAL_CHARS)
-
-
-def make_zip_response(files_dir: Path, zip_name: str) -> Tuple[BytesIO, str]:
-    zip_buf = BytesIO()
-    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(files_dir.iterdir()):
-            zf.write(str(f), f.name)
-    zip_buf.seek(0)
-    return zip_buf, safe_filename(zip_name) + '.zip'
+db = Database()
 
 
 def get_playlist_or_fail(playlist_id):
@@ -813,7 +538,9 @@ def search_music_api():
                 # 添加艺术家字符串（如果需要）
                 if 'artists' in song:
                     song['artist_string'] = song['artists']
-        
+
+        db.add_search(keyword, search_type)
+
         return APIResponse.success(result, "搜索完成")
         
     except ValueError as e:
@@ -973,7 +700,7 @@ def download_lyric():
         if not lrc:
             return APIResponse.error("未找到歌词", 404)
         if tlyric and tl:
-            lrc = _merge_translation_lyric(lrc, tl)
+            lrc = merge_translation_lyric(lrc, tl)
         song_info = name_v1(song_id)
         song_name = 'lyric'
         if song_info and song_info.get('songs') and song_info['songs']:
@@ -1020,7 +747,7 @@ def batch_download_lyric():
                     if not lrc:
                         continue
                     if tlyric and tl:
-                        lrc = _merge_translation_lyric(lrc, tl)
+                        lrc = merge_translation_lyric(lrc, tl)
                     (tmp_path / safe_name).write_text(lrc, encoding='utf-8')
                     success_count += 1
                 except Exception:
@@ -1387,26 +1114,11 @@ def download_music_api():
         return APIResponse.error(f"下载异常: {str(e)}", 500)
 
 
-# ---------- 下载记录（文件持久化） ----------
-DL_HISTORY_PATH = Path(__file__).parent / 'dl_history.json'
-
-def _load_dl_history() -> list:
-    try:
-        if DL_HISTORY_PATH.exists():
-            return json.loads(DL_HISTORY_PATH.read_text(encoding='utf-8'))
-    except Exception:
-        pass
-    return []
-
-def _save_dl_history(records: list):
-    try:
-        DL_HISTORY_PATH.write_text(json.dumps(records, ensure_ascii=False), encoding='utf-8')
-    except Exception:
-        pass
+# ---------- 下载记录（SQLite 持久化） ----------
 
 @app.route('/dl/history', methods=['GET'])
 def dl_history_get():
-    records = _load_dl_history()[:50]
+    records = db.get_downloads(50)
     return APIResponse.success(records)
 
 @app.route('/dl/history', methods=['POST'])
@@ -1418,12 +1130,7 @@ def dl_history_add():
         quality = data.get('quality', '')
         if not name or not song_id:
             return APIResponse.error("缺少必要参数")
-        records = _load_dl_history()
-        records.insert(0, {
-            'name': name, 'song_id': str(song_id), 'quality': quality,
-            'time': time.strftime('%Y-%m-%d %H:%M:%S')
-        })
-        _save_dl_history(records[:50])
+        db.add_download(name, song_id, quality)
         return APIResponse.success(None, "记录已保存")
     except Exception as e:
         return APIResponse.error(f"保存失败: {str(e)}", 500)
@@ -1431,7 +1138,23 @@ def dl_history_add():
 @app.route('/dl/history', methods=['DELETE'])
 def dl_history_clear():
     try:
-        _save_dl_history([])
+        db.clear_downloads()
+        return APIResponse.success(None, "记录已清空")
+    except Exception as e:
+        return APIResponse.error(f"清空失败: {str(e)}", 500)
+
+
+# ---------- 搜索记录（SQLite 持久化） ----------
+
+@app.route('/search/history', methods=['GET'])
+def search_history_get():
+    records = db.get_searches(50)
+    return APIResponse.success(records)
+
+@app.route('/search/history', methods=['DELETE'])
+def search_history_clear():
+    try:
+        db.clear_searches()
         return APIResponse.success(None, "记录已清空")
     except Exception as e:
         return APIResponse.error(f"清空失败: {str(e)}", 500)
