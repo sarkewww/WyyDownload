@@ -123,7 +123,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
 </div>
 
 <div class="tab-bar" id="tab-bar">
-    <button class="tab-btn active" data-tab="home">首页</button><button class="tab-btn" data-tab="search">搜索</button><button class="tab-btn" data-tab="parse">单曲</button><button class="tab-btn" data-tab="playlist" disabled>歌单</button><button class="tab-btn" data-tab="album" disabled>专辑</button><button class="tab-btn" data-tab="download">下载</button>
+    <button class="tab-btn active" data-tab="home">首页</button><button class="tab-btn" data-tab="search">搜索</button><button class="tab-btn" data-tab="parse">单曲</button><button class="tab-btn" data-tab="playlist">歌单</button><button class="tab-btn" data-tab="album" disabled>专辑</button><button class="tab-btn" data-tab="download">下载</button>
 </div>
 
 <div id="panels">
@@ -139,7 +139,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
             <h5 style="margin-top:0">快捷功能</h5>
             <div style="display:flex;flex-wrap:wrap;gap:6px">
                 <button class="btn btn-xs btn-outline-primary" data-tab="parse">单曲</button><button class="btn btn-xs btn-outline-primary" data-tab="download">下载</button>
-                <button class="btn btn-xs btn-outline-primary" data-tab="search">搜索</button><button class="btn btn-xs btn-outline-secondary" disabled>歌单</button><button class="btn btn-xs btn-outline-secondary" disabled>专辑</button>
+                <button class="btn btn-xs btn-outline-primary" data-tab="search">搜索</button><button class="btn btn-xs btn-outline-primary" data-tab="playlist">歌单</button><button class="btn btn-xs btn-outline-secondary" disabled>专辑</button>
             </div>
         </div>
         <div class="dash-card">
@@ -158,7 +158,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
     <div class="card">
         <div class="mb-3" style="position:relative"><label class="form-label">关键词</label><input type="text" id="search_keywords" class="form-control" placeholder="歌名/歌手/专辑..."></div>
         <div class="search-type-tabs" id="search-type-tabs">
-            <button class="active" data-st="1">单曲</button><button data-st="10">专辑</button><button data-st="1004">MV</button><button data-st="2">歌词</button>
+            <button class="active" data-st="1">单曲</button><button data-st="10">专辑</button><button data-st="1004" disabled>MV</button><button data-st="2" disabled>歌词</button>
         </div>
         <button id="search-btn" class="btn btn-primary w-100">搜索</button>
     </div>
@@ -193,10 +193,21 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
 </div>
 
 <div class="panel" id="panel-playlist">
-    <div class="card p-5 text-center">
-        <h5 style="color:var(--muted)">歌单功能开发中</h5>
-        <p class="text-sm" style="color:var(--muted)">QQ音乐歌单API正在调研适配中，敬请期待。</p>
-        <p class="text-sm"><a href="/">切换到网易云使用歌单功能</a></p>
+    <div class="card">
+        <div class="mb-3"><label class="form-label">歌单 ID 或链接</label><input type="text" id="playlist_id" class="form-control" placeholder="7039749142 或 https://y.qq.com/n/ryqq_v2/playlist/7039749142"></div>
+        <div class="mb-3"><label class="form-label">音质</label><select id="playlist_batch_level" class="form-select"><option value="flac" selected>SQ无损品质 (FLAC)</option><option value="320">HQ高品质 (320kbps)</option><option value="128">标准 (128kbps)</option><option value="master">臻品母带3.0</option><option value="atmos_2">臻品全景声2.0</option><option value="hires">Hi-Res</option></select></div>
+        <div style="display:flex;gap:8px"><button id="playlist-btn" class="btn btn-outline-primary flex-grow-1">查看歌单</button><button id="playlist-batch-btn" class="btn btn-primary flex-grow-1">解析全部</button></div>
+    </div>
+    <div id="playlist-result" class="d-none result-section">
+        <div class="card"><div style="display:flex;align-items:center;gap:12px"><img id="playlist-cover" src="" style="width:52px;height:52px;object-fit:cover;border-radius:8px"><div><h5 id="playlist-name" class="mb-0"></h5><span class="text-sm" style="color:var(--muted)"><span id="playlist-creator"></span> · <span id="playlist-count"></span> 首</span></div></div><p id="playlist-desc" class="text-sm mt-2" style="color:var(--muted);max-height:60px;overflow-y:auto"></p></div>
+        <ul class="list-group mt-2" id="playlist-tracks"></ul>
+    </div>
+    <div id="playlist-batch-result" class="d-none result-section">
+        <div class="card">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px"><img id="batch-playlist-cover" src="" style="width:52px;height:52px;object-fit:cover;border-radius:8px"><div><h5 id="batch-playlist-name" class="mb-0"></h5><span class="text-sm" style="color:var(--muted)"><span id="batch-playlist-creator"></span></span></div></div>
+            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px"><span class="badge bg-success"><span id="batch-resolved-count"></span>/<span id="batch-total-count"></span> 首</span><div style="margin-left:auto;display:flex;gap:4px;flex-wrap:wrap"><button id="batch-play-all-btn" class="btn btn-xs btn-outline-info">播放</button><button id="batch-export-txt-btn" class="btn btn-xs btn-outline-secondary">TXT</button></div></div>
+        </div>
+        <div class="card mt-2 p-0" style="overflow:hidden"><div class="table-responsive"><table class="table table-striped table-hover mb-0"><thead><tr><th>#</th><th>歌曲</th><th>歌手</th><th>时长</th><th>音质</th><th>操作</th></tr></thead><tbody id="batch-tracks-body"></tbody></table></div></div>
     </div>
 </div>
 
@@ -267,7 +278,31 @@ var searchType='1';
 $('#search-type-tabs button').on('click',function(){searchType=$(this).data('st');$('#search-type-tabs button').removeClass('active');$(this).addClass('active')});
 $('#search-btn').on('click',function(){var kw=$('#search_keywords').val().trim();if(!kw)return toast('请输入关键词','error');$(this).prop('disabled',true).text('搜索中...');$.post(API+'/search',{keyword:kw,type:searchType,limit:30},function(d){if(d.status===200){var items=d.data||[],rows='';if(searchType==='1'){items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e.artists+'</td><td class="text-sm" style="color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e.album+'</td><td class="text-sm">'+(e.interval?Math.floor(e.interval/60)+':'+String(e.interval%60).padStart(2,'0'):'')+'</td><td><button class="btn btn-xs btn-outline-primary parse-song-btn" data-mid="'+e.id+'">解析</button></td></tr>'})}else if(searchType==='8'){items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted)">'+e.artists+'</td><td class="text-sm">'+e.public_time+'</td><td class="text-sm">'+e.song_count+'首</td></tr>'})}else if(searchType==='1004'){items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted)">'+e.artists+'</td><td class="text-sm">'+(e.play_count>10000?(e.play_count/10000).toFixed(1)+'万':e.play_count)+' 播放</td></tr>'})}else{items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted)">'+e.artists+'</td><td class="text-sm" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(e.lyric_preview||'')+'</td></tr>'})}$('#search-tbody').html(rows||'<tr><td colspan="6" class="text-center text-sm" style="color:var(--muted)">无结果</td></tr>');$('#search-total').text('共 '+items.length+' 条结果');$('#search-result').removeClass('d-none')}else toast(d.message||'搜索失败','error');$('#search-btn').prop('disabled',false).text('搜索')},'json').fail(function(){toast('请求失败','error');$('#search-btn').prop('disabled',false).text('搜索')})});
 $(document).on('click','.parse-song-btn',function(){var mid=$(this).data('mid');switchTab('parse');$('#song_ids').val(mid);$('#parse-btn').click()});
+$(document).on('click','.jp-parse',function(){var mid=$(this).data('id');switchTab('parse');$('#song_ids').val(mid);$('#parse-btn').click()});
 $('#search_keywords').on('keydown',function(e){if(e.key==='Enter')$('#search-btn').click()});
+
+$('#playlist-btn').on('click',function(){var pid=$('#playlist_id').val().trim();if(!pid)return toast('请输入歌单ID或链接','error');var m=pid.match(/playlist\/(\d+)/);if(m)pid=m[1];$.post(API+'/playlist',{id:pid},function(d){if(d.status===200){var info=d.data.info;var songs=d.data.songs;$('#playlist-cover').attr('src',info.cover);$('#playlist-name').text(info.name);$('#playlist-creator').text(info.creator);$('#playlist-count').text(info.song_count);$('#playlist-desc').text(info.desc||'');$('#playlist-tracks').empty();songs.forEach(function(s,i){$('#playlist-tracks').append('<li class=\"list-group-item d-flex justify-content-between align-items-center\"><div><img src=\"'+s.picUrl+'\" style=\"width:32px;height:32px;object-fit:cover;border-radius:5px;margin-right:8px\"><strong class=\"song-title\">'+(i+1)+'. '+s.name+'</strong> <span style=\"color:var(--muted);font-size:12px\">'+s.artists+'</span></div><div><button class=\"btn btn-xs btn-outline-primary mr1 jp-parse\" data-id=\"'+s.id+'\">解析</button></div></li>')});$('#playlist-result').removeClass('d-none');$('#playlist-batch-result').addClass('d-none')}else toast(d.message||'获取失败','error')},'json').fail(function(){toast('请求失败','error')})});
+
+$('#playlist-batch-btn').on('click',function(){var pid=$('#playlist_id').val().trim(),lv=$('#playlist_batch_level').val();if(!pid)return toast('请输入歌单ID','error');var m=pid.match(/playlist\/(\d+)/);if(m)pid=m[1];var btn=$(this);btn.prop('disabled',true).text('解析中...');$('#playlist-result').addClass('d-none');$.ajax({url:API+'/playlist/batch',method:'POST',data:{id:pid,level:lv},dataType:'json',success:function(d){if(d.status===200){renderQQBatchResult(d.data)}else toast(d.message||'失败','error');btn.prop('disabled',false).text('解析全部')},error:function(){toast('请求失败','error');btn.prop('disabled',false).text('解析全部')}})});
+
+function renderQQBatchResult(data){
+    var info=data.playlist,tracks=data.tracks,resolved=data.resolved,total=data.total;
+    $('#batch-playlist-cover').attr('src',info.coverImgUrl);
+    $('#batch-playlist-name').text(info.name||'');
+    $('#batch-playlist-creator').text(info.creator||'');
+    $('#batch-resolved-count').text(resolved);
+    $('#batch-total-count').text(total);
+    var tbody=$('#batch-tracks-body').empty();
+    tracks.forEach(function(s,i){var ok=s.url&&s.url.length>0;var qb=ok?'<span class=\"badge bg-success\">'+s.quality_name+'</span>':'<span class=\"badge bg-danger\">失败</span>';var ub=ok?'<a href=\"'+s.url+'\" class=\"btn btn-xs btn-outline-primary mr1\" target=\"_blank\">下载</a>':'<button class=\"btn btn-xs btn-outline-secondary mr1\" disabled>无链接</button>';var dur=s.interval?Math.floor(s.interval/60)+':'+String(s.interval%60).padStart(2,'0'):'-';tbody.append('<tr><td>'+(i+1)+'</td><td><img src=\"'+s.picUrl+'\" class=\"cover-thumb\" style=\"width:22px;height:22px;object-fit:cover;border-radius:3px;margin-right:5px\"><span class=\"song-title\">'+s.name+'</span></td><td style=\"color:var(--muted);font-size:12px\">'+s.artists+'</td><td style=\"font-size:12px\">'+dur+'</td><td>'+qb+'</td><td>'+ub+'<button class=\"btn btn-xs btn-outline-primary mr1 copy-url-btn\" data-url=\"'+(ok?s.url:'')+'\" '+(ok?'':'disabled')+'>复制</button><a href=\"/qq/lyric/download?id='+s.id+'\" class=\"btn btn-xs btn-outline-secondary\">歌词</a></td></tr>')});
+    $('#playlist-batch-result').removeClass('d-none')
+}
+$(document).on('click','.copy-url-btn',function(){var u=$(this).data('url'),b=$(this);if(u){navigator.clipboard.writeText(u).then(function(){b.addClass('copied').text('已复制');setTimeout(function(){b.removeClass('copied').text('复制')},2000)})}});
+
+// Batch play
+$(document).on('click','#batch-play-all-btn',function(){var audios=[],sids=[];$('#batch-tracks-body tr').each(function(){var n=$(this).find('.song-title').text(),a=$(this).find('td:eq(2)').text().trim(),u=$(this).find('.copy-url-btn').data('url'),p=$(this).find('img').attr('src');if(u){audios.push({name:n,artist:a,url:u,cover:p})}});if(!audios.length)return toast('没有可播放的歌曲','error');if(ap){ap.destroy()}ap=new APlayer({container:document.getElementById('aplayer'),lrcType:1,listFolded:false,listMaxHeight:'200px',audio:audios});$('#song-info').removeClass('d-none').data('song-id','');$('#song_name').text('播放列表');$('#lyric').html('');switchTab('parse');toast('已加载 '+audios.length+' 首','success')});
+
+// Batch export TXT
+$('#batch-export-txt-btn').on('click',function(){var t='';$('#batch-tracks-body tr').each(function(){var i=$(this).find('td:first').text(),n=$(this).find('.song-title').text(),a=$(this).find('td:eq(2)').text().trim(),u=$(this).find('.copy-url-btn').data('url');t+=i+'. '+n+' - '+a+'\n';if(u)t+='   '+u+'\n'});var b=new Blob([t],{type:'text/plain'});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='qqplaylist.txt';document.body.appendChild(a);a.click();document.body.removeChild(a);toast('TXT导出完成','success')});
 });
 </script>
 </body>
