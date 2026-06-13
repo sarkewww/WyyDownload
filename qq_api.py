@@ -219,6 +219,26 @@ class QQMusic:
             print(f'获取歌词失败: {e}')
             return {'error': '无法获取歌词'}
 
+    def search_music(self, keyword, limit=30, page=1, search_type=0):
+        """搜索音乐
+        search_type: 0=歌曲 7=歌词 8=专辑 12=MV
+        """
+        url = 'https://c.y.qq.com/soso/fcgi-bin/client_search_cp'
+        params = {
+            'w': keyword,
+            'p': page,
+            'n': limit,
+            'format': 'json',
+            't': search_type,
+        }
+        try:
+            resp = requests.get(url, params=params, headers=self.headers, timeout=15, verify=False)
+            resp.encoding = 'utf-8'
+            return resp.json()
+        except Exception as e:
+            print(f'QQ搜索失败: {e}')
+            return {'code': -1, 'data': {}}
+
     def process_request(self, song_url):
         songmid = self.ids(song_url)
         if not songmid:

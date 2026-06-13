@@ -100,7 +100,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
 </div>
 
 <div class="tab-bar" id="tab-bar">
-    <button class="tab-btn active" data-tab="home">首页</button><button class="tab-btn" data-tab="search" disabled>搜索</button><button class="tab-btn" data-tab="parse">单曲</button><button class="tab-btn" data-tab="playlist" disabled>歌单</button><button class="tab-btn" data-tab="album" disabled>专辑</button><button class="tab-btn" data-tab="download">下载</button>
+    <button class="tab-btn active" data-tab="home">首页</button><button class="tab-btn" data-tab="search">搜索</button><button class="tab-btn" data-tab="parse">单曲</button><button class="tab-btn" data-tab="playlist" disabled>歌单</button><button class="tab-btn" data-tab="album" disabled>专辑</button><button class="tab-btn" data-tab="download">下载</button>
 </div>
 
 <div id="panels">
@@ -116,7 +116,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
             <h5 style="margin-top:0">快捷功能</h5>
             <div style="display:flex;flex-wrap:wrap;gap:6px">
                 <button class="btn btn-xs btn-outline-primary" data-tab="parse">单曲</button><button class="btn btn-xs btn-outline-primary" data-tab="download">下载</button>
-                <button class="btn btn-xs btn-outline-secondary" disabled>搜索</button><button class="btn btn-xs btn-outline-secondary" disabled>歌单</button><button class="btn btn-xs btn-outline-secondary" disabled>专辑</button>
+                <button class="btn btn-xs btn-outline-primary" data-tab="search">搜索</button><button class="btn btn-xs btn-outline-secondary" disabled>歌单</button><button class="btn btn-xs btn-outline-secondary" disabled>专辑</button>
             </div>
         </div>
         <div class="dash-card">
@@ -133,8 +133,15 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
 
 <div class="panel" id="panel-search">
     <div class="card">
-        <div class="mb-3" style="position:relative"><label class="form-label">关键词</label><input type="text" id="search_keywords" class="form-control" placeholder="歌名/歌手/专辑..." disabled></div>
-        <button id="search-btn" class="btn btn-primary w-100" disabled>搜索（开发中）</button>
+        <div class="mb-3" style="position:relative"><label class="form-label">关键词</label><input type="text" id="search_keywords" class="form-control" placeholder="歌名/歌手/专辑..."></div>
+        <div class="search-type-tabs" id="search-type-tabs">
+            <button class="active" data-st="1">单曲</button><button data-st="10">专辑</button><button data-st="1004">MV</button><button data-st="2">歌词</button>
+        </div>
+        <button id="search-btn" class="btn btn-primary w-100">搜索</button>
+    </div>
+    <div id="search-result" class="d-none result-section card">
+        <div class="d-flex justify-content-between align-items-center mb-2"><span class="text-sm" id="search-total" style="color:var(--muted)"></span></div>
+        <div class="table-responsive"><table class="table table-striped table-hover mb-0"><tbody id="search-tbody"></tbody></table></div>
     </div>
 </div>
 
@@ -232,6 +239,12 @@ $('#show-big-pic').on('click',function(){$('#big-pic-img').attr('src',$(this).da
 $('#download-lyric-btn').on('click',function(){var sid=$('#song-info').data('song-id');if(!sid)return toast('请先解析','error');var a=document.createElement('a');a.href=API+'/lyric/download?id='+sid;document.body.appendChild(a);a.click();document.body.removeChild(a)});
 
 $('#download-btn').on('click',function(){var mid=$('#download_id').val().trim(),q=$('#download_quality').val();if(!mid)return toast('请输入songmid或链接','error');$('#download-progress').removeClass('d-none');$(this).prop('disabled',true).text('下载中...');var x=new XMLHttpRequest();x.open('POST',API+'/download',true);x.responseType='blob';x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.onload=function(){if(x.status===200){var fn='music.'+(q==='flac'?'flac':'mp3');var u=URL.createObjectURL(x.response);var a=document.createElement('a');a.href=u;a.download=fn;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);$.post('/qq/dl/history',{name:$('#download_id').val().trim(),song_id:$('#download_id').val().trim(),quality:q});toast('下载完成','success')}else toast('下载失败','error');$('#download-progress').addClass('d-none');$('#download-btn').prop('disabled',false).text('下载')};x.onerror=function(){$('#download-progress').addClass('d-none');$('#download-btn').prop('disabled',false).text('下载')};x.send('id='+encodeURIComponent(mid)+'&quality='+encodeURIComponent(q)+'&format=file')});
+
+var searchType='1';
+$('#search-type-tabs button').on('click',function(){searchType=$(this).data('st');$('#search-type-tabs button').removeClass('active');$(this).addClass('active')});
+$('#search-btn').on('click',function(){var kw=$('#search_keywords').val().trim();if(!kw)return toast('请输入关键词','error');$(this).prop('disabled',true).text('搜索中...');$.post(API+'/search',{keyword:kw,type:searchType,limit:30},function(d){if(d.status===200){var items=d.data||[],rows='';if(searchType==='1'){items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e.artists+'</td><td class="text-sm" style="color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+e.album+'</td><td class="text-sm">'+(e.interval?Math.floor(e.interval/60)+':'+String(e.interval%60).padStart(2,'0'):'')+'</td><td><button class="btn btn-xs btn-outline-primary parse-song-btn" data-mid="'+e.id+'">解析</button></td></tr>'})}else if(searchType==='8'){items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted)">'+e.artists+'</td><td class="text-sm">'+e.public_time+'</td><td class="text-sm">'+e.song_count+'首</td></tr>'})}else if(searchType==='1004'){items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted)">'+e.artists+'</td><td class="text-sm">'+(e.play_count>10000?(e.play_count/10000).toFixed(1)+'万':e.play_count)+' 播放</td></tr>'})}else{items.forEach(function(e){rows+='<tr><td><img src="'+e.picUrl+'" class="cover-thumb" width="36" height="36" style="border-radius:4px;object-fit:cover" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 36 36%22><rect fill=%22%23ddd%22 width=%2236%22 height=%2236%22/></svg>\'"></td><td><span class="song-title" title="'+e.name+'">'+e.name+'</span></td><td class="text-sm" style="color:var(--muted)">'+e.artists+'</td><td class="text-sm" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(e.lyric_preview||'')+'</td></tr>'})}$('#search-tbody').html(rows||'<tr><td colspan="6" class="text-center text-sm" style="color:var(--muted)">无结果</td></tr>');$('#search-total').text('共 '+items.length+' 条结果');$('#search-result').removeClass('d-none')}else toast(d.message||'搜索失败','error');$('#search-btn').prop('disabled',false).text('搜索')},'json').fail(function(){toast('请求失败','error');$('#search-btn').prop('disabled',false).text('搜索')})});
+$(document).on('click','.parse-song-btn',function(){var mid=$(this).data('mid');switchTab('parse');$('#song_ids').val(mid);$('#parse-btn').click()});
+$('#search_keywords').on('keydown',function(e){if(e.key==='Enter')$('#search-btn').click()});
 });
 </script>
 </body>

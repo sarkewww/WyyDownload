@@ -1531,8 +1531,70 @@ def qq_search_music_api():
         if validation_error:
             return validation_error
 
+        SEARCH_T_MAP = {'1': 0, '10': 8, '1004': 12, '2': 7}
+        t = SEARCH_T_MAP.get(search_type, 0)
+
+        raw = qq_api.search_music(keyword, limit, search_type=t)
+        if raw.get('code') != 0:
+            return APIResponse.error(raw.get('message', '搜索失败'), 500)
+
+        dk = {0: 'song', 8: 'album', 12: 'mv', 7: 'lyric'}
+        data_key = dk.get(t, 'song')
+        items = raw.get('data', {}).get(data_key, {}).get('list', [])
+
+        result = []
+        for item in items:
+            if t == 0:  # 歌曲
+                singers = '/'.join(s.get('name', '') for s in item.get('singer', []))
+                result.append({
+                    'id': item.get('songmid', ''),
+                    'songid': item.get('songid'),
+                    'name': item.get('songname', ''),
+                    'artists': singers,
+                    'album': item.get('albumname', ''),
+                    'albummid': item.get('albummid', ''),
+                    'picUrl': f"https://y.qq.com/music/photo_new/T002R300x300M000{item.get('albummid', '')}.jpg",
+                    'interval': item.get('interval', 0),
+                    'duration': (item.get('interval', 0) or 0) * 1000,
+                    'sizeflac': item.get('sizeflac', 0),
+                    'size320': item.get('size320', 0),
+                    'size128': item.get('size128', 0),
+                })
+            elif t == 8:  # 专辑
+                singers = '/'.join(s.get('name', '') for s in item.get('singer_list', []))
+                result.append({
+                    'id': item.get('albumMID', ''),
+                    'name': item.get('albumName', ''),
+                    'artists': singers,
+                    'album': item.get('singerName', ''),
+                    'picUrl': item.get('albumPic', ''),
+                    'song_count': item.get('song_count', 0),
+                    'public_time': item.get('publicTime', ''),
+                })
+            elif t == 12:  # MV
+                result.append({
+                    'id': item.get('v_id', ''),
+                    'name': item.get('mv_name', ''),
+                    'artists': item.get('singer_name', ''),
+                    'picUrl': item.get('mv_pic_url', ''),
+                    'duration': item.get('duration', 0),
+                    'play_count': item.get('play_count', 0),
+                })
+            elif t == 7:  # 歌词
+                singers = '/'.join(s.get('name', '') for s in item.get('singer', []))
+                result.append({
+                    'id': item.get('songmid', ''),
+                    'songid': item.get('songid'),
+                    'name': item.get('songname', ''),
+                    'artists': singers,
+                    'album': item.get('albumname', ''),
+                    'picUrl': f"https://y.qq.com/music/photo_new/T002R300x300M000{item.get('albummid', '')}.jpg",
+                    'interval': item.get('interval', 0),
+                    'lyric_preview': item.get('content', '')[:200],
+                })
+
         db.add_qq_search(keyword, search_type)
-        return APIResponse.success([], "QQ搜索暂未实现")
+        return APIResponse.success(result, "搜索完成")
     except Exception as e:
         api_service.logger.error(f"QQ搜索异常: {e}")
         return APIResponse.error(f"搜索失败: {str(e)}", 500)
