@@ -172,7 +172,8 @@ class QQMusic:
                     'pic': img_url,
                     'mid': song_info.get('mid', mid),
                     'id': song_info.get('id', sid),
-                    'interval': duration_str
+                    'interval': duration_str,
+                    'pay_play': (song_info.get('pay') or {}).get('pay_play', 0),
                 }
             else:
                 return {'msg': '信息获取错误/歌曲不存在'}

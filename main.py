@@ -1493,6 +1493,9 @@ def qq_get_song_info():
             raw_lyric = qq_api.get_music_lyric_new(sid) if sid else {}
             lyric_info = _adapt_lyric(raw_lyric)
 
+            # Extract pay info from raw API response
+            payplay = (raw.get('pay_play', 0) if isinstance(raw, dict) else 0) or 0
+
             response_data = {
                 'id': songmid,
                 'name': song_data.get('name', ''),
@@ -1503,6 +1506,7 @@ def qq_get_song_info():
                 'lyric': lyric_info.get('lrc', {}).get('lyric', ''),
                 'tlyric': lyric_info.get('tlyric', {}).get('lyric', ''),
                 'degraded': degraded,
+                'payplay': payplay,
             }
             if url_result and url_result.get('url'):
                 response_data.update({
@@ -1547,6 +1551,7 @@ def qq_search_music_api():
         for item in items:
             if t == 0:  # 歌曲
                 singers = '/'.join(s.get('name', '') for s in item.get('singer', []))
+                pay = item.get('pay', {}) or {}
                 result.append({
                     'id': item.get('songmid', ''),
                     'songid': item.get('songid'),
@@ -1560,6 +1565,7 @@ def qq_search_music_api():
                     'sizeflac': item.get('sizeflac', 0),
                     'size320': item.get('size320', 0),
                     'size128': item.get('size128', 0),
+                    'payplay': pay.get('payplay', 0),
                 })
             elif t == 8:  # 专辑
                 singers = '/'.join(s.get('name', '') for s in item.get('singer_list', []))
@@ -1639,6 +1645,7 @@ def qq_playlist_batch():
         for i, s in enumerate(songs):
             singers = '/'.join(sg.get('name', '') for sg in s.get('singer', []))
             songmid = s.get('songmid', '')
+            pay = s.get('pay', {}) or {}
             track = {
                 'id': songmid,
                 'songid': s.get('songid', ''),
@@ -1650,6 +1657,7 @@ def qq_playlist_batch():
                 'duration': (s.get('interval', 0) or 0) * 1000,
                 'url': '', 'level': level, 'quality_name': '获取失败',
                 'degraded': False, 'ext': '', 'size': 0, 'size_formatted': '-', 'br': 0,
+                'payplay': pay.get('payplay', 0),
             }
             tracks[i] = track
             if songmid:
