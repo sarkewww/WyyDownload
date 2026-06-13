@@ -201,8 +201,8 @@ function lrctran(ly,tl){ly=lrctrim(ly);tl=lrctrim(tl);var res='';for(var i=0,j=0
 function fmtSize(b){if(b>=1073741824)return (b/1073741824).toFixed(1)+' GB';if(b>=1048576)return (b/1048576).toFixed(1)+' MB';if(b>=1024)return (b/1024).toFixed(1)+' KB';return b+' B'}
 function toast(msg,type){type=type||'info';var t=$('<div class="toast '+type+'">'+msg+'</div>');$('#toast-container').append(t);setTimeout(function(){t.fadeOut(300,function(){t.remove()})},3000)}
 
-var theme=localStorage.getItem('qq_theme')||'light';$('html').attr('data-theme',theme);$('#theme-toggle').text(theme==='dark'?'☀️':'🌙');
-$('#theme-toggle').on('click',function(){var t=$('html').attr('data-theme')==='dark'?'light':'dark';$('html').attr('data-theme',t);$('#theme-toggle').text(t==='dark'?'☀️':'🌙');localStorage.setItem('qq_theme',t)});
+var theme=localStorage.getItem('theme')||'light';$('html').attr('data-theme',theme);$('#theme-toggle').text(theme==='dark'?'☀️':'🌙');
+$('#theme-toggle').on('click',function(){var t=$('html').attr('data-theme')==='dark'?'light':'dark';$('html').attr('data-theme',t);$('#theme-toggle').text(t==='dark'?'☀️':'🌙');localStorage.setItem('theme',t)});
 
 function loadDlHistory(){$.get('/qq/dl/history',function(d){if(d.status!==200)return;var h=d.data||[],c=$('#dl-history').empty();if(!h.length){c.html('<span class="text-sm" style="color:var(--muted)">暂无记录</span>');return}h.forEach(function(e){c.append('<div class="item"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">'+e.name+'</span><span class="text-sm" style="color:var(--muted);margin:0 8px">'+e.time+'</span></div>')})})}
 loadDlHistory();
