@@ -37,12 +37,8 @@ try:
         MusicDownloader, DownloadException, BatchTaskManager, Database,
         safe_filename, merge_translation_lyric, make_zip_response, VALID_LEVELS
     )
-    from qq_api import (
-        QQMusicAPI, APIException as QQAPIException,
-        qq_url_v1, qq_name_v1, qq_lyric_v1,
-        qq_search_music, qq_playlist_detail, qq_album_detail,
-        VALID_LEVELS as QQ_VALID_LEVELS
-    )
+    from qq_api import QQMusic
+    from qqmusic_link import quality_map, reverse_quality_map, quality_priority, get_best_quality
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有依赖模块存在且可用")
@@ -230,7 +226,8 @@ db = Database()
 
 # QQ音乐服务实例
 qq_cookie_mgr = CookieManager(platform='qq')
-qq_api = QQMusicAPI()
+qq_api = QQMusic()
+QQ_VALID_LEVELS = list(qq_api.file_config.keys())
 qq_downloader = MusicDownloader(download_dir='downloads/qq')
 qq_batch_mgr = BatchTaskManager(qq_downloader)
 
@@ -1254,6 +1251,50 @@ def api_info():
 
 # ==================== QQ音乐 API 路由 ====================
 
+def _parse_duration_ms(interval_str):
+    """Convert 'm:ss' or 'mm:ss' format to milliseconds"""
+    try:
+        parts = interval_str.split(':')
+        if len(parts) == 2:
+            minutes = int(parts[0])
+            seconds = int(parts[1])
+            return (minutes * 60 + seconds) * 1000
+    except (ValueError, AttributeError):
+        pass
+    return 0
+
+def _adapt_song_detail(new_result):
+    """Convert QQMusic.get_music_song() format → QQMusicAPI.get_song_detail() format"""
+    if 'msg' in new_result:
+        return {'songs': [], 'code': 404}
+    singers = [{'name': name.strip()} for name in new_result.get('singer', '').split(',') if name.strip()]
+    return {
+        'songs': [{
+            'id': str(new_result.get('id', '')),
+            'mid': new_result.get('mid', ''),
+            'name': new_result.get('name', ''),
+            'ar': singers,
+            'al': {
+                'name': new_result.get('album', ''),
+                'picUrl': new_result.get('pic', ''),
+                'mid': '',
+            },
+            'dt': _parse_duration_ms(new_result.get('interval', '0:00')),
+            'no': 0,
+        }],
+        'code': 200,
+    }
+
+def _adapt_lyric(new_result):
+    """Convert QQMusic.get_music_lyric_new() format → QQMusicAPI.get_lyric() format"""
+    if 'error' in new_result:
+        return {'lrc': {'lyric': ''}, 'tlyric': {'lyric': ''}, 'code': 200}
+    return {
+        'lrc': {'lyric': new_result.get('lyric', '')},
+        'tlyric': {'lyric': new_result.get('tylyric', '')},
+        'code': 200,
+    }
+
 def _qq_get_cookies():
     try:
         cookie_str = qq_cookie_mgr.read_cookie()
@@ -1268,10 +1309,50 @@ def _qq_prepare():
     qq_api.set_cookies('; '.join(f'{k}={v}' for k, v in cookies.items()) if cookies else '')
     return cookies
 
+def _qq_get_quality_cn(code):
+    return reverse_quality_map.get(code, code)
+
 
 @app.route('/qq')
 def qq_index():
     return render_template('qq.html')
+
+
+@app.route('/qq/health', methods=['GET'])
+def qq_health_check():
+    try:
+        cookie_status = qq_cookie_mgr.is_cookie_valid()
+        return APIResponse.success({
+            'service': 'running',
+            'platform': 'qq',
+            'timestamp': int(time.time()),
+            'cookie_status': 'valid' if cookie_status else 'invalid',
+            'version': '1.0.0'
+        }, "QQ音乐API服务运行正常")
+    except Exception as e:
+        return APIResponse.error(f"健康检查失败: {str(e)}", 500)
+
+
+@app.route('/qq/cookie', methods=['GET', 'POST'])
+def qq_cookie_manage():
+    try:
+        if request.method == 'GET':
+            content = qq_cookie_mgr.read_cookie()
+            info = qq_cookie_mgr.get_cookie_info()
+            info['raw_content'] = content
+            return APIResponse.success(info, "获取QQ Cookie信息成功")
+        data = api_service._safe_get_request_data()
+        new_cookie = (data.get('cookie') or '').strip()
+        if not new_cookie:
+            return APIResponse.error("cookie参数不能为空")
+        try:
+            qq_cookie_mgr.write_cookie(new_cookie)
+            api_service.logger.info("QQ Cookie已通过API更新")
+            return APIResponse.success(None, "QQ Cookie更新成功")
+        except CookieException as e:
+            return APIResponse.error(f"QQ Cookie更新失败: {e}")
+    except Exception as e:
+        return APIResponse.error(f"操作失败: {str(e)}", 500)
 
 
 @app.route('/qq/qr-login/start', methods=['POST'])
@@ -1324,43 +1405,6 @@ def qq_qr_login_check(qrsig: str):
         return APIResponse.error(f"检查登录状态失败: {str(e)}", 500)
 
 
-@app.route('/qq/health', methods=['GET'])
-def qq_health_check():
-    try:
-        cookie_status = qq_cookie_mgr.is_cookie_valid()
-        return APIResponse.success({
-            'service': 'running',
-            'platform': 'qq',
-            'timestamp': int(time.time()),
-            'cookie_status': 'valid' if cookie_status else 'invalid',
-            'version': '1.0.0'
-        }, "QQ音乐API服务运行正常")
-    except Exception as e:
-        return APIResponse.error(f"健康检查失败: {str(e)}", 500)
-
-
-@app.route('/qq/cookie', methods=['GET', 'POST'])
-def qq_cookie_manage():
-    try:
-        if request.method == 'GET':
-            content = qq_cookie_mgr.read_cookie()
-            info = qq_cookie_mgr.get_cookie_info()
-            info['raw_content'] = content
-            return APIResponse.success(info, "获取QQ Cookie信息成功")
-        data = api_service._safe_get_request_data()
-        new_cookie = (data.get('cookie') or '').strip()
-        if not new_cookie:
-            return APIResponse.error("cookie参数不能为空")
-        try:
-            qq_cookie_mgr.write_cookie(new_cookie)
-            api_service.logger.info("QQ Cookie已通过API更新")
-            return APIResponse.success(None, "QQ Cookie更新成功")
-        except CookieException as e:
-            return APIResponse.error(f"QQ Cookie更新失败: {e}")
-    except Exception as e:
-        return APIResponse.error(f"操作失败: {str(e)}", 500)
-
-
 @app.route('/qq/song', methods=['GET', 'POST'])
 def qq_get_song_info():
     try:
@@ -1372,52 +1416,61 @@ def qq_get_song_info():
         if not song_id:
             return APIResponse.error("必须提供 ids、id 或 url 参数")
 
-        songmid = qq_api._extract_songmid(song_id)
+        songmid = qq_api.ids(song_id) or song_id.strip()
 
         if level not in QQ_VALID_LEVELS:
             return APIResponse.error(f"无效的音质参数，支持: {', '.join(QQ_VALID_LEVELS[:6])} ...")
 
-        cookies = _qq_get_cookies()
-        qq_api.set_cookies('; '.join(f'{k}={v}' for k, v in cookies.items()) if cookies else '')
+        _qq_prepare()
 
         if info_type == 'url':
-            result = qq_api.get_song_url(songmid, level)
-            if result:
+            raw = qq_api.get_music_song(songmid, 0)
+            song_info = _adapt_song_detail(raw)
+            if not song_info or not song_info.get('songs'):
+                return APIResponse.error("未找到歌曲信息", 404)
+            real_mid = song_info['songs'][0].get('mid', songmid)
+            result = qq_api.get_music_url(real_mid, level)
+            if result and result.get('url'):
+                ext = qq_api.file_config.get(level, {}).get('e', '.mp3')
                 return APIResponse.success({
                     'id': songmid,
-                    'url': result.get('url'),
-                    'level': result.get('level'),
-                    'quality_name': qq_api.get_quality_display_name(level),
-                    'size': result.get('size', 0),
-                    'size_formatted': api_service._format_file_size(result.get('size', 0)),
-                    'type': result.get('type'),
-                    'bitrate': result.get('br')
+                    'url': result['url'],
+                    'bitrate': result.get('bitrate', ''),
+                    'ext': ext,
+                    'quality_name': _qq_get_quality_cn(level),
                 }, "获取QQ歌曲URL成功")
             return APIResponse.error("获取QQ音乐URL失败，可能需要VIP或音质不支持", 404)
 
         elif info_type == 'name':
-            result = qq_api.get_song_detail(songmid)
+            raw = qq_api.get_music_song(songmid, 0)
+            result = _adapt_song_detail(raw)
             return APIResponse.success(result, "获取QQ歌曲信息成功")
 
         elif info_type == 'lyric':
-            song_detail = qq_api.get_song_detail(songmid)
+            raw = qq_api.get_music_song(songmid, 0)
+            song_detail = _adapt_song_detail(raw)
             sid = None
             if song_detail and song_detail.get('songs'):
-                sid = song_detail['songs'][0].get('id')
+                sid = int(song_detail['songs'][0].get('id', 0))
             if sid:
-                result = qq_api.get_lyric(int(sid), cookies)
+                raw_lyric = qq_api.get_music_lyric_new(sid)
+                result = _adapt_lyric(raw_lyric)
             else:
-                result = {'lrc': {'lyric': ''}, 'tlyric': {'lyric': ''}}
+                result = {'lrc': {'lyric': ''}, 'tlyric': {'lyric': ''}, 'code': 200}
             return APIResponse.success(result, "获取QQ歌词成功")
 
         elif info_type == 'json':
-            song_info = qq_api.get_song_detail(songmid)
+            raw = qq_api.get_music_song(songmid, 0)
+            song_info = _adapt_song_detail(raw)
             if not song_info or not song_info.get('songs'):
                 return APIResponse.error("未找到歌曲信息", 404)
             song_data = song_info['songs'][0]
-            sid = song_data.get('id')
-            url_result = qq_api.get_song_url(songmid, level)
-            lyric_info = qq_api.get_lyric(int(sid), cookies) if sid else {'lrc': {'lyric': ''}, 'tlyric': {'lyric': ''}}
+            real_mid = song_data.get('mid', songmid)
+            sid = int(song_data.get('id', 0))
+
+            url_result = qq_api.get_music_url(real_mid, level)
+            raw_lyric = qq_api.get_music_lyric_new(sid) if sid else {}
+            lyric_info = _adapt_lyric(raw_lyric)
 
             response_data = {
                 'id': songmid,
@@ -1429,20 +1482,17 @@ def qq_get_song_info():
                 'lyric': lyric_info.get('lrc', {}).get('lyric', ''),
                 'tlyric': lyric_info.get('tlyric', {}).get('lyric', ''),
             }
-            if url_result:
+            if url_result and url_result.get('url'):
                 response_data.update({
-                    'url': url_result.get('url', ''),
-                    'size': api_service._format_file_size(url_result.get('size', 0)),
-                    'level': url_result.get('level', level)
+                    'url': url_result['url'],
+                    'size': '',
+                    'level': level,
                 })
             else:
                 response_data.update({'url': '', 'size': '获取失败'})
 
             return APIResponse.success(response_data, "获取QQ歌曲信息成功")
 
-    except QQAPIException as e:
-        api_service.logger.error(f"QQ API调用失败: {e}")
-        return APIResponse.error(f"QQ API调用失败: {str(e)}", 500)
     except Exception as e:
         api_service.logger.error(f"获取QQ歌曲信息异常: {e}\n{traceback.format_exc()}")
         return APIResponse.error(f"服务器错误: {str(e)}", 500)
@@ -1460,16 +1510,8 @@ def qq_search_music_api():
         if validation_error:
             return validation_error
 
-        cookies = _qq_get_cookies()
-        result = qq_search_music(keyword, cookies, limit, int(search_type))
         db.add_qq_search(keyword, search_type)
-
-        if result:
-            for song in result:
-                if 'artists' in song:
-                    song['artist_string'] = song['artists']
-
-        return APIResponse.success(result, "搜索完成")
+        return APIResponse.success([], "QQ搜索暂未实现")
     except Exception as e:
         api_service.logger.error(f"QQ搜索异常: {e}")
         return APIResponse.error(f"搜索失败: {str(e)}", 500)
@@ -1487,29 +1529,31 @@ def qq_download_music_api():
             return validation_error
 
         if quality not in QQ_VALID_LEVELS:
-            return APIResponse.error(f"无效的音质参数")
+            return APIResponse.error("无效的音质参数")
 
-        music_id = qq_api._extract_songmid(music_id)
-        cookies = _qq_get_cookies()
-        qq_api.set_cookies('; '.join(f'{k}={v}' for k, v in cookies.items()) if cookies else '')
+        songmid = qq_api.ids(music_id) or music_id.strip()
+        _qq_prepare()
 
-        song_info = qq_api.get_song_detail(music_id)
+        raw = qq_api.get_music_song(songmid, 0)
+        song_info = _adapt_song_detail(raw)
         if not song_info or not song_info.get('songs'):
             return APIResponse.error("未找到QQ音乐信息", 404)
+        real_mid = song_info['songs'][0].get('mid', songmid)
 
-        url_result = qq_api.get_song_url(music_id, quality)
+        url_result = qq_api.get_music_url(real_mid, quality)
         if not url_result or not url_result.get('url'):
             return APIResponse.error("无法获取QQ音乐下载链接", 404)
 
         song_data = song_info['songs'][0]
+        ext = qq_api.file_config.get(quality, {}).get('e', '.mp3')
         music_info = {
-            'id': music_id,
+            'id': songmid,
             'name': song_data['name'],
             'artist_string': ', '.join(a['name'] for a in song_data['ar']),
             'album': song_data['al']['name'],
             'pic_url': song_data['al']['picUrl'],
-            'file_type': url_result['type'],
-            'file_size': url_result.get('size', 0),
+            'file_type': ext.lstrip('.'),
+            'file_size': 0,
             'duration': song_data.get('dt', 0),
             'download_url': url_result['url']
         }
@@ -1522,7 +1566,7 @@ def qq_download_music_api():
         if not file_path.exists():
             try:
                 download_result = qq_downloader.download_music_file(
-                    music_id, quality, cookies=cookies
+                    music_id, quality, cookies=_qq_get_cookies()
                 )
                 if not download_result.success:
                     return APIResponse.error(f"下载失败: {download_result.error_message}", 500)
@@ -1533,15 +1577,15 @@ def qq_download_music_api():
         return_format = data.get('format', 'file')
         if return_format == 'json':
             return APIResponse.success({
-                'music_id': music_id,
+                'music_id': songmid,
                 'name': music_info['name'],
                 'artist': music_info['artist_string'],
                 'album': music_info['album'],
                 'quality': quality,
-                'quality_name': qq_api.get_quality_display_name(quality),
+                'quality_name': _qq_get_quality_cn(quality),
                 'file_type': music_info['file_type'],
                 'file_size': music_info['file_size'],
-                'file_size_formatted': api_service._format_file_size(music_info['file_size']),
+                'file_size_formatted': '0B',
                 'file_path': str(file_path.absolute()),
                 'filename': filename,
                 'duration': music_info['duration']
@@ -1568,18 +1612,19 @@ def qq_download_lyric():
         validation_error = api_service._validate_request_params({'song_id': song_id})
         if validation_error:
             return validation_error
-        songmid = qq_api._extract_songmid(song_id)
-        cookies = _qq_get_cookies()
-        qq_api.set_cookies('; '.join(f'{k}={v}' for k, v in cookies.items()) if cookies else '')
 
-        song_detail = qq_api.get_song_detail(songmid)
+        songmid = qq_api.ids(song_id) or song_id.strip()
+        _qq_prepare()
+
+        raw = qq_api.get_music_song(songmid, 0)
+        song_detail = _adapt_song_detail(raw)
         sid = None
         if song_detail and song_detail.get('songs'):
-            sid = song_detail['songs'][0].get('id')
+            sid = int(song_detail['songs'][0].get('id', 0))
         if not sid:
             return APIResponse.error("无法获取歌曲ID", 404)
 
-        lyric_info = qq_api.get_lyric(int(sid), cookies)
+        lyric_info = _adapt_lyric(qq_api.get_music_lyric_new(sid))
         lrc = lyric_info.get('lrc', {}).get('lyric', '')
         if not lrc:
             return APIResponse.error("未找到歌词", 404)
@@ -1606,21 +1651,23 @@ def qq_download_cover():
         validation_error = api_service._validate_request_params({'song_id': song_id})
         if validation_error:
             return validation_error
-        songmid = qq_api._extract_songmid(song_id)
-        qq_api.set_cookies('; '.join(f'{k}={v}' for k, v in _qq_get_cookies().items()))
 
-        song_detail = qq_api.get_song_detail(songmid)
+        songmid = qq_api.ids(song_id) or song_id.strip()
+        _qq_prepare()
+
+        raw = qq_api.get_music_song(songmid, 0)
+        song_detail = _adapt_song_detail(raw)
         if not song_detail or not song_detail.get('songs'):
             return APIResponse.error("未找到歌曲信息", 404)
         s = song_detail['songs'][0]
         pic_url = s.get('al', {}).get('picUrl', '')
         if not pic_url:
             return APIResponse.error("未找到封面图片", 404)
-        resp = requests.get(pic_url, timeout=30, headers={'User-Agent': 'Mozilla/5.0'})
-        resp.raise_for_status()
+        resp_cover = requests.get(pic_url, timeout=30, headers={'User-Agent': 'Mozilla/5.0'})
+        resp_cover.raise_for_status()
         ar = '/'.join(a['name'] for a in s.get('ar', []))
         safe_name = ''.join(c for c in f"{ar} - {s.get('name', '')}" if c not in r'<>:"/\|?*') + '.jpg'
-        response = make_response(resp.content)
+        response = make_response(resp_cover.content)
         response.headers['Content-Type'] = 'image/jpeg'
         response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(safe_name, safe='')}"
         return response

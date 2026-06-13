@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "code-rag": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "code-rag-mcp",
+        "serve"
+      ]
+    }
+  }
+}

@@ -1,134 +1,104 @@
-"""QQ音乐API模块
-
-提供QQ音乐相关API接口封装，包括：
-- 歌曲URL获取（支持21种音质）
-- 歌曲详情获取
-- 歌词获取（base64解码）
-- 搜索功能
-- 歌单和专辑详情（待实现）
-来自 https://github.com/Suxiaoqinx/qqmusic_flac 的项目
+"""
+QQ音乐API Python版本
+原作者: 苏晓晴
 """
 
 import json
 import base64
-import logging
+import re as _re
 import random
-import re
 import time
 import urllib.parse
-from typing import Dict, List, Optional, Any, Tuple
-
+import urllib3
 import requests
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-class APIException(Exception):
-    """QQ音乐API异常类"""
-    pass
-
-
-class QQAPIConstants:
-    """QQ音乐API相关常量"""
-    BASE_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg'
-    SONG_URL = 'https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg'
-    SEARCH_URL = 'https://c.y.qq.com/soso/fcgi-bin/client_search_cp'
-    PLAYLIST_URL = 'https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg'
-    USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
-
-    FILE_CONFIG = {
-        '128':      {'s': 'M500', 'e': '.mp3',  'bitrate': '128kbps'},
-        '320':      {'s': 'M800', 'e': '.mp3',  'bitrate': '320kbps'},
-        'flac':     {'s': 'F000', 'e': '.flac', 'bitrate': 'FLAC'},
-        'master':   {'s': 'AI00', 'e': '.flac', 'bitrate': '臻品母带'},
-        'atmos_2':  {'s': 'Q000', 'e': '.flac', 'bitrate': '全景声2.0'},
-        'atmos_51': {'s': 'Q001', 'e': '.flac', 'bitrate': '全景声5.1'},
-        'ogg_640':  {'s': 'O801', 'e': '.ogg',  'bitrate': '640kbps'},
-        'ogg_320':  {'s': 'O800', 'e': '.ogg',  'bitrate': '320kbps'},
-        'ogg_192':  {'s': 'O600', 'e': '.ogg',  'bitrate': '192kbps'},
-        'ogg_96':   {'s': 'O400', 'e': '.ogg',  'bitrate': '96kbps'},
-        'aac_320':  {'s': 'C800', 'e': '.m4a',  'bitrate': '320kbps'},
-        'aac_256':  {'s': 'C700', 'e': '.m4a',  'bitrate': '256kbps'},
-        'aac_192':  {'s': 'C600', 'e': '.m4a',  'bitrate': '192kbps'},
-        'aac_128':  {'s': 'C500', 'e': '.m4a',  'bitrate': '128kbps'},
-        'aac_96':   {'s': 'C400', 'e': '.m4a',  'bitrate': '96kbps'},
-        'aac_64':   {'s': 'C300', 'e': '.m4a',  'bitrate': '64kbps'},
-        'aac_48':   {'s': 'C200', 'e': '.m4a',  'bitrate': '48kbps'},
-        'aac_24':   {'s': 'C100', 'e': '.m4a',  'bitrate': '24kbps'},
-        'ape':      {'s': 'A000', 'e': '.ape',  'bitrate': 'APE'},
-        'dts':      {'s': 'D000', 'e': '.dts',  'bitrate': 'DTS'},
-        'dolby':    {'s': 'RS01', 'e': '.flac', 'bitrate': '杜比全景声'},
-        'hires':    {'s': 'SQ00', 'e': '.flac', 'bitrate': 'Hi-Res'},
-    }
-
-    QUALITY_DISPLAY = {
-        '128': '标准', '320': 'HQ高品质', 'flac': 'SQ无损品质',
-        'master': '臻品母带3.0', 'atmos_2': '臻品全景声2.0', 'atmos_51': '臻品音质2.0',
-        'ogg_640': 'OGG 640kbps', 'ogg_320': 'OGG高品质', 'ogg_192': 'OGG标准', 'ogg_96': 'OGG 96kbps',
-        'aac_320': 'AAC 320kbps', 'aac_256': 'AAC 256kbps', 'aac_192': 'AAC高品质',
-        'aac_128': 'AAC 128kbps', 'aac_96': 'AAC标准', 'aac_64': 'AAC 64kbps',
-        'aac_48': 'AAC 48kbps', 'aac_24': 'AAC 24kbps',
-        'ape': 'APE无损', 'dts': 'DTS', 'dolby': '杜比全景声', 'hires': 'Hi-Res',
-    }
-
-
-class QQMusicAPI:
-    """QQ音乐API主类"""
-
+class QQMusic:
     def __init__(self):
-        self.logger = logging.getLogger('qq_api')
-        self.cookies: Dict[str, str] = {}
+        self.base_url = 'https://u.y.qq.com/cgi-bin/musicu.fcg'
         self.guid = '10000'
         self.uin = '0'
+        self.cookies = {}
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        }
 
-    def set_cookies(self, cookie_str: str):
+        self.file_config = {
+            '128': {'s': 'M500', 'e': '.mp3', 'bitrate': '128kbps'},
+            '320': {'s': 'M800', 'e': '.mp3', 'bitrate': '320kbps'},
+            'flac': {'s': 'F000', 'e': '.flac', 'bitrate': 'FLAC'},
+            'master': {'s': 'AI00', 'e': '.flac', 'bitrate': 'Master'},
+            'atmos_2': {'s': 'Q000', 'e': '.flac', 'bitrate': 'Atmos 2'},
+            'atmos_51': {'s': 'Q001', 'e': '.flac', 'bitrate': 'Atmos 5.1'},
+            'ogg_640': {'s': 'O801', 'e': '.ogg', 'bitrate': '640kbps'},
+            'ogg_320': {'s': 'O800', 'e': '.ogg', 'bitrate': '320kbps'},
+            'ogg_192': {'s': 'O600', 'e': '.ogg', 'bitrate': '192kbps'},
+            'ogg_96': {'s': 'O400', 'e': '.ogg', 'bitrate': '96kbps'},
+            'aac_320': {'s': 'C800', 'e': '.m4a', 'bitrate': '320kbps'},
+            'aac_256': {'s': 'C700', 'e': '.m4a', 'bitrate': '256kbps'},
+            'aac_192': {'s': 'C600', 'e': '.m4a', 'bitrate': '192kbps'},
+            'aac_128': {'s': 'C500', 'e': '.m4a', 'bitrate': '128kbps'},
+            'aac_96': {'s': 'C400', 'e': '.m4a', 'bitrate': '96kbps'},
+            'aac_64': {'s': 'C300', 'e': '.m4a', 'bitrate': '64kbps'},
+            'aac_48': {'s': 'C200', 'e': '.m4a', 'bitrate': '48kbps'},
+            'aac_24': {'s': 'C100', 'e': '.m4a', 'bitrate': '24kbps'},
+            'ape': {'s': 'A000', 'e': '.ape', 'bitrate': 'APE'},
+            'dts': {'s': 'D000', 'e': '.dts', 'bitrate': 'DTS'},
+            'dolby': {'s': 'RS01', 'e': '.flac', 'bitrate': 'Dolby Atmos'},
+            'hires': {'s': 'SQ00', 'e': '.flac', 'bitrate': 'Hi-Res'}
+        }
+
+        self.song_url = 'https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg'
+        self.lyric_url = 'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg'
+
+    def set_cookies(self, cookie_str):
         if cookie_str:
-            for item in cookie_str.split(';'):
-                item = item.strip()
+            for item in cookie_str.split('; '):
                 if '=' in item:
                     key, value = item.split('=', 1)
                     if key and value:
                         self.cookies[key] = value
 
-    def _extract_songmid(self, id_or_url: str) -> str:
-        """从URL或ID中提取songmid"""
-        if 'y.qq.com' in id_or_url:
-            import re
-            m = re.search(r'/songDetail/([^/?]+)', id_or_url)
-            if m:
-                return m.group(1)
-            m = re.search(r'id=(\w+)', id_or_url)
-            if m:
-                return m.group(1)
-        return str(id_or_url).strip()
+    def ids(self, url_str):
+        if 'y.qq.com' in url_str:
+            if '/songDetail/' in url_str:
+                import re
+                match = re.search(r'/songDetail/([^/?]+)', url_str)
+                return match.group(1) if match else ''
 
-    def _request(self, url: str, post_data=None, use_cookies: bool = True) -> str:
-        headers = {
-            'User-Agent': QQAPIConstants.USER_AGENT,
-        }
-        if post_data:
+            if 'id=' in url_str:
+                import re
+                match = re.search(r'id=(\w+)', url_str)
+                return match.group(1) if match else ''
+        return None
+
+    def _request(self, request_url, post_fields=None):
+        method = 'POST' if post_fields else 'GET'
+        headers = dict(self.headers)
+        if post_fields:
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
-        if use_cookies and self.cookies:
+
+        if self.cookies:
             cookie_str = '; '.join(f'{k}={v}' for k, v in self.cookies.items())
             headers['Cookie'] = cookie_str
 
-        try:
-            if post_data:
-                resp = requests.post(url, data=post_data, headers=headers, timeout=30)
-            else:
-                resp = requests.get(url, headers=headers, timeout=30)
-            resp.encoding = 'utf-8'
-            return resp.text
-        except requests.RequestException as e:
-            raise APIException(f"HTTP请求失败: {e}")
+        if method == 'POST':
+            resp = requests.post(request_url, data=post_fields, headers=headers, timeout=30, verify=False)
+        else:
+            resp = requests.get(request_url, headers=headers, timeout=30, verify=False)
 
-    def get_song_url(self, songmid: str, quality: str) -> Dict[str, Any]:
-        """获取歌曲播放URL"""
-        if quality not in QQAPIConstants.FILE_CONFIG:
-            raise APIException(f"不支持的音质: {quality}")
+        resp.encoding = 'utf-8'
+        return resp.text
 
-        file_info = QQAPIConstants.FILE_CONFIG[quality]
+    def get_music_url(self, songmid, file_type='flac'):
+        if file_type not in self.file_config:
+            raise ValueError(f"Invalid file_type. Choose from: {', '.join(self.file_config.keys())}")
+
+        file_info = self.file_config[file_type]
         file_name = f"{file_info['s']}{songmid}{songmid}{file_info['e']}"
 
-        payload = {
+        req_data = {
             'req_1': {
                 'module': 'vkey.GetVkeyServer',
                 'method': 'CgiGetVkey',
@@ -152,15 +122,9 @@ class QQMusicAPI:
         }
 
         try:
-            has_cookie = bool(self.cookies)
-            response_text = self._request(QQAPIConstants.BASE_URL, json.dumps(payload))
-            data = json.loads(response_text)
+            response = self._request(self.base_url, json.dumps(req_data))
+            data = json.loads(response)
             purl = data.get('req_1', {}).get('data', {}).get('midurlinfo', [{}])[0].get('purl', '')
-
-            if not purl and has_cookie:
-                response_text = self._request(QQAPIConstants.BASE_URL, json.dumps(payload), use_cookies=False)
-                data = json.loads(response_text)
-                purl = data.get('req_1', {}).get('data', {}).get('midurlinfo', [{}])[0].get('purl', '')
 
             if not purl:
                 return None
@@ -168,58 +132,55 @@ class QQMusicAPI:
             music_url = data['req_1']['data']['sip'][1] + purl
             return {
                 'url': music_url.replace('http://', 'https://'),
-                'size': 0,
-                'br': file_info['bitrate'],
-                'type': file_info['e'].lstrip('.'),
-                'level': quality,
+                'bitrate': file_info['bitrate']
             }
         except Exception as e:
-            self.logger.error(f"获取QQ音乐URL失败: {e}")
+            print(f'获取音乐URL失败: {e}')
             return None
 
-    def get_song_detail(self, songmid: str, songid: int = 0) -> Dict[str, Any]:
-        """获取歌曲详情"""
-        if songid:
-            req_data = {'songid': songid, 'platform': 'yqq', 'format': 'json'}
+    def get_music_song(self, mid, sid):
+        if not sid and mid and mid.isdigit():
+            sid = int(mid)
+            mid = ''
+        if sid != 0:
+            req_data = {'songid': sid, 'platform': 'yqq', 'format': 'json'}
         else:
-            req_data = {'songmid': songmid, 'platform': 'yqq', 'format': 'json'}
+            req_data = {'songmid': mid, 'platform': 'yqq', 'format': 'json'}
 
         try:
-            response_text = self._request(QQAPIConstants.SONG_URL, urllib.parse.urlencode(req_data))
-            data = json.loads(response_text)
+            response = self._request(self.song_url, urllib.parse.urlencode(req_data))
+            data = json.loads(response)
 
-            if data.get('code') != 0 or not data.get('data'):
-                raise APIException(f"获取歌曲详情失败: {data.get('msg', '未知错误')}")
+            if data.get('data') and len(data['data']) > 0:
+                song_info = data['data'][0]
+                album_info = song_info.get('album', {})
+                singers = song_info.get('singer', [])
+                singer_names = ', '.join(s.get('name', '') for s in singers)
 
-            song_info = data['data'][0]
-            album_info = song_info.get('album', {})
-            singers = song_info.get('singer', [])
-            singer_names = '/'.join(s.get('name', '') for s in singers)
-            album_mid = album_info.get('mid', '')
-            pic_url = f'https://y.qq.com/music/photo_new/T002R800x800M000{album_mid}.jpg?max_age=2592000' if album_mid else ''
+                album_mid = album_info.get('mid', '')
+                img_url = f'https://y.qq.com/music/photo_new/T002R800x800M000{album_mid}.jpg?max_age=2592000' if album_mid else 'https://example.com/default-cover.jpg'
 
-            return {
-                'songs': [{
-                    'id': str(song_info.get('id', songid)),
-                    'mid': song_info.get('mid', songmid),
-                    'name': song_info.get('name', ''),
-                    'ar': [{'name': s.get('name', '')} for s in singers],
-                    'al': {
-                        'name': album_info.get('name', ''),
-                        'picUrl': pic_url,
-                        'mid': album_mid,
-                    },
-                    'dt': (song_info.get('interval', 0) or 0) * 1000,
-                    'no': 0,
-                }],
-                'code': 200,
-            }
+                interval = song_info.get('interval', 0)
+                minutes = interval // 60
+                seconds = interval % 60
+                duration_str = f'{minutes}:{seconds:02d}'
+
+                return {
+                    'name': song_info.get('name', 'Unknown'),
+                    'album': album_info.get('name', 'Unknown'),
+                    'singer': singer_names,
+                    'pic': img_url,
+                    'mid': song_info.get('mid', mid),
+                    'id': song_info.get('id', sid),
+                    'interval': duration_str
+                }
+            else:
+                return {'msg': '信息获取错误/歌曲不存在'}
         except Exception as e:
-            self.logger.error(f"获取QQ歌曲详情失败: {e}")
-            raise APIException(f"获取歌曲详情失败: {e}")
+            print(f'获取歌曲信息失败: {e}')
+            return {'msg': '信息获取错误/歌曲不存在'}
 
-    def get_lyric(self, songid: int, cookies: Dict[str, str] = None) -> Dict[str, Any]:
-        """获取歌词（base64解码）"""
+    def get_music_lyric_new(self, songid):
         payload = {
             'music.musichallSong.PlayLyricInfo.GetPlayLyricInfo': {
                 'module': 'music.musichallSong.PlayLyricInfo',
@@ -242,56 +203,70 @@ class QQMusicAPI:
         }
 
         try:
-            response_text = self._request(QQAPIConstants.BASE_URL, json.dumps(payload))
-            data = json.loads(response_text)
+            response = self._request(self.base_url, json.dumps(payload))
+            data = json.loads(response)
             lyric_data = data.get('music.musichallSong.PlayLyricInfo.GetPlayLyricInfo', {}).get('data', {})
 
             lyric = ''
-            tlyric = ''
+            tylyric = ''
             if lyric_data.get('lyric'):
                 lyric = base64.b64decode(lyric_data['lyric']).decode('utf-8')
             if lyric_data.get('trans'):
-                tlyric = base64.b64decode(lyric_data['trans']).decode('utf-8')
+                tylyric = base64.b64decode(lyric_data['trans']).decode('utf-8')
+
+            return {'lyric': lyric, 'tylyric': tylyric}
+        except Exception as e:
+            print(f'获取歌词失败: {e}')
+            return {'error': '无法获取歌词'}
+
+    def process_request(self, song_url):
+        songmid = self.ids(song_url)
+        if not songmid:
+            return {'error': '歌曲ID无效'}
+
+        sid = 0
+        mid = songmid
+
+        if songmid.isdigit():
+            sid = int(songmid)
+            mid = ''
+
+        try:
+            music_info = self.get_music_song(mid, sid)
+            if 'msg' in music_info:
+                return music_info
+
+            music_lyric = self.get_music_lyric_new(music_info['id'])
+
+            file_types = ['aac_48', 'aac_96', 'aac_192', 'ogg_96', 'ogg_192', 'ogg_320', 'ogg_640', 'atmos_51', 'atmos_2', 'master', 'flac', '320', '128']
+            results = {}
+
+            for file_type in file_types:
+                result = self.get_music_url(music_info['mid'], file_type)
+                if result:
+                    results[file_type] = {
+                        'url': result['url'],
+                        'bitrate': result['bitrate']
+                    }
 
             return {
-                'lrc': {'lyric': lyric},
-                'tlyric': {'lyric': tlyric},
-                'code': 200,
+                'music_info': music_info,
+                'music_url': results,
+                'music_lyric': music_lyric
             }
         except Exception as e:
-            self.logger.error(f"获取QQ歌词失败: {e}")
-            return {'lrc': {'lyric': ''}, 'tlyric': {'lyric': ''}, 'code': 200}
-
-    def search_music(self, keyword: str, cookies: Dict[str, str] = None,
-                     limit: int = 30, search_type: int = 1, offset: int = 0) -> List[Dict[str, Any]]:
-        """搜索音乐（待完善）"""
-        # TODO: QQ Music search API requires additional research
-        # The client_search_cp endpoint may need specific parameters and signing
-        self.logger.warning("QQ音乐搜索API尚未完整实现")
-        return []
-
-    def get_playlist_detail(self, playlist_id: str, cookies: Dict[str, str] = None) -> Dict[str, Any]:
-        """获取歌单详情（待完善）"""
-        self.logger.warning("QQ音乐歌单API尚未完整实现")
-        return None
-
-    def get_album_detail(self, album_id: str, cookies: Dict[str, str] = None) -> Dict[str, Any]:
-        """获取专辑详情（待完善）"""
-        self.logger.warning("QQ音乐专辑API尚未完整实现")
-        return None
-
-    def get_quality_display_name(self, quality: str) -> str:
-        return QQAPIConstants.QUALITY_DISPLAY.get(quality, quality)
+            print(f'处理请求失败: {e}')
+            return {'error': '处理请求失败'}
 
     @staticmethod
-    def _hash33(s: str) -> int:
+    def _hash33(s):
         h = 0
         for c in s:
             h = (h << 5) + h + ord(c)
             h &= 0xFFFFFFFF
         return h & 0x7FFFFFFF
 
-    def get_qr_code(self) -> Optional[Dict[str, Any]]:
+    def get_qr_code(self):
         t = random.randint(0, 9999999) / 10000000
         url = (f'https://xui.ptlogin2.qq.com/ssl/ptqrshow'
                f'?appid=716027609&e=2&l=M&s=3&d=72&v=4&t={t}'
@@ -305,24 +280,28 @@ class QQMusicAPI:
             }
             resp = sess.get(url, timeout=15, headers=headers)
             for c in sess.cookies:
-                if c.value: self.cookies[c.name] = c.value
+                if c.value:
+                    self.cookies[c.name] = c.value
             qrsig = ''
             for c in sess.cookies:
-                if c.name == 'qrsig': qrsig = c.value
+                if c.name == 'qrsig':
+                    qrsig = c.value
             if not qrsig:
-                m = re.search(r'qrsig=([^;]+)', resp.headers.get('Set-Cookie', ''))
+                m = _re.search(r'qrsig=([^;]+)', resp.headers.get('Set-Cookie', ''))
                 if m:
                     qrsig = m.group(1)
                     self.cookies['qrsig'] = qrsig
             if not qrsig:
                 return None
-            return {'qrsig': qrsig,
-                    'image': 'data:image/png;base64,' + base64.b64encode(resp.content).decode()}
+            return {
+                'qrsig': qrsig,
+                'image': 'data:image/png;base64,' + base64.b64encode(resp.content).decode()
+            }
         except Exception as e:
-            self.logger.error(f"获取QQ二维码失败: {e}")
+            print(f'获取QQ二维码失败: {e}')
             return None
 
-    def check_qr_login(self, qrsig: str):
+    def check_qr_login(self, qrsig):
         ptqrtoken = self._hash33(qrsig)
         ts = int(time.time() * 1000)
         url = (f'https://xui.ptlogin2.qq.com/ssl/ptqrlogin'
@@ -338,7 +317,7 @@ class QQMusicAPI:
             resp = requests.get(url, timeout=15, headers=headers, cookies=self.cookies)
             resp.encoding = 'utf-8'
             text = resp.text
-            m = re.search(r"ptuiCB\('(\d+)','(\d+)','([^']*)','([^']*)','([^']*)'", text)
+            m = _re.search(r"ptuiCB\('(\d+)','(\d+)','([^']*)','([^']*)','([^']*)'", text)
             if not m:
                 return (-1, '解析失败', {}, '')
             code = int(m.group(1))
@@ -346,13 +325,14 @@ class QQMusicAPI:
             cb_url = m.group(3)
             cookies = dict(self.cookies)
             for c in resp.cookies:
-                if c.value: cookies[c.name] = c.value
+                if c.value:
+                    cookies[c.name] = c.value
             return (code, msg, cookies, cb_url)
         except Exception as e:
-            self.logger.error(f"检查QQ登录状态失败: {e}")
+            print(f'检查QQ登录状态失败: {e}')
             return (-1, str(e), {}, '')
 
-    def exchange_callback(self, callback_url: str) -> Dict[str, str]:
+    def exchange_callback(self, callback_url):
         try:
             sess = requests.Session()
             sess.cookies.update(self.cookies)
@@ -363,49 +343,9 @@ class QQMusicAPI:
             sess.get(callback_url, timeout=15, allow_redirects=True, headers=headers)
             result = {}
             for c in sess.cookies:
-                if c.value: result[c.name] = c.value
+                if c.value:
+                    result[c.name] = c.value
             return result
         except Exception as e:
-            self.logger.error(f"交换QQ回调失败: {e}")
+            print(f'交换QQ回调失败: {e}')
             return {}
-
-
-_module_api = QQMusicAPI()
-
-VALID_LEVELS = list(QQAPIConstants.FILE_CONFIG.keys())
-
-
-def qq_url_v1(songmid: str, level: str, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
-    _module_api.set_cookies('; '.join(f'{k}={v}' for k, v in cookies.items()) if cookies else '')
-    return _module_api.get_song_url(songmid, level)
-
-
-def qq_name_v1(songmid: str, songid: int = 0) -> Dict[str, Any]:
-    return _module_api.get_song_detail(songmid, songid)
-
-
-def qq_lyric_v1(songid: int, cookies: Dict[str, str] = None) -> Dict[str, Any]:
-    return _module_api.get_lyric(songid, cookies)
-
-
-def qq_search_music(keyword: str, cookies: Dict[str, str] = None,
-                    limit: int = 30, search_type: int = 1, offset: int = 0) -> List[Dict[str, Any]]:
-    return _module_api.search_music(keyword, cookies, limit, search_type, offset)
-
-
-def qq_playlist_detail(playlist_id: str, cookies: Dict[str, str] = None) -> Optional[Dict[str, Any]]:
-    return _module_api.get_playlist_detail(playlist_id, cookies)
-
-
-def qq_album_detail(album_id: str, cookies: Dict[str, str] = None) -> Optional[Dict[str, Any]]:
-    return _module_api.get_album_detail(album_id, cookies)
-
-
-if __name__ == "__main__":
-    print("QQ音乐API模块")
-    print("支持的功能:")
-    print("- 歌曲URL获取 (21种音质)")
-    print("- 歌曲详情获取")
-    print("- 歌词获取 (base64解码)")
-    print("- 搜索功能 (待完善)")
-    print("- 歌单/专辑详情 (待完善)")
