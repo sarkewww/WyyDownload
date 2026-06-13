@@ -1928,7 +1928,12 @@ def qq_download_music_api():
             'download_url': url_result['url']
         }
 
-        safe_name = f"{music_info['name']} [{actual_quality}]"
+        fn_fmt = data.get('filename_format', '{title} [{quality}]')
+        safe_artist = ''.join(c for c in music_info['artist_string'] if c not in r'<>:"/\|?*')
+        safe_title = ''.join(c for c in music_info['name'] if c not in r'<>:"/\|?*')
+        safe_album = ''.join(c for c in music_info['album'] if c not in r'<>:"/\|?*')
+        safe_name = fn_fmt.replace('{artist}', safe_artist).replace('{title}', safe_title).replace('{album}', safe_album).replace('{quality}', actual_quality)
+        safe_name = ''.join(c for c in safe_name if c not in r'<>:"/\|?*')
         safe_name = ''.join(c for c in safe_name if c not in r'<>:"/\|?*')
         filename = f"{safe_name}.{music_info['file_type']}"
         file_path = qq_downloader.download_dir / filename
