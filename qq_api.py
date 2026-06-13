@@ -6,6 +6,7 @@
 - 歌词获取（base64解码）
 - 搜索功能
 - 歌单和专辑详情（待实现）
+来自 https://github.com/Suxiaoqinx/qqmusic_flac 的项目
 """
 
 import json
