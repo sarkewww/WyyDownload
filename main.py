@@ -228,6 +228,14 @@ db = Database()
 qq_cookie_mgr = CookieManager(platform='qq')
 qq_api = QQMusic()
 QQ_VALID_LEVELS = list(qq_api.file_config.keys())
+QQ_QUALITY_DEGRADE_ORDER = [
+    'master',    # 臻品母带 → 超级会员
+    'atmos_2',   # 臻品全景声 → 超级会员
+    'hires',     # Hi-Res → 豪华绿钻+
+    'flac',      # SQ无损 → 音乐包/豪华绿钻+
+    '320',       # HQ高品质 → 所有用户
+    '128',       # 标准 → 所有用户
+]
 qq_downloader = MusicDownloader(download_dir='downloads/qq')
 qq_batch_mgr = BatchTaskManager(qq_downloader)
 
@@ -1312,6 +1320,16 @@ def _qq_prepare():
 def _qq_get_quality_cn(code):
     return reverse_quality_map.get(code, code)
 
+def _degrade_qq_quality(real_mid, requested_level):
+    if requested_level not in QQ_QUALITY_DEGRADE_ORDER:
+        requested_level = '128'
+    start_idx = QQ_QUALITY_DEGRADE_ORDER.index(requested_level)
+    for level in QQ_QUALITY_DEGRADE_ORDER[start_idx:]:
+        result = qq_api.get_music_url(real_mid, level)
+        if result and result.get('url'):
+            return result, level, (level != requested_level)
+    return None, None, False
+
 
 @app.route('/qq')
 def qq_index():
@@ -1429,15 +1447,17 @@ def qq_get_song_info():
             if not song_info or not song_info.get('songs'):
                 return APIResponse.error("未找到歌曲信息", 404)
             real_mid = song_info['songs'][0].get('mid', songmid)
-            result = qq_api.get_music_url(real_mid, level)
-            if result and result.get('url'):
-                ext = qq_api.file_config.get(level, {}).get('e', '.mp3')
+            url_result, actual_level, degraded = _degrade_qq_quality(real_mid, level)
+            if url_result and url_result.get('url'):
+                ext = qq_api.file_config.get(actual_level, {}).get('e', '.mp3')
                 return APIResponse.success({
                     'id': songmid,
-                    'url': result['url'],
-                    'bitrate': result.get('bitrate', ''),
+                    'url': url_result['url'],
+                    'bitrate': url_result.get('bitrate', ''),
                     'ext': ext,
-                    'quality_name': _qq_get_quality_cn(level),
+                    'level': actual_level,
+                    'quality_name': _qq_get_quality_cn(actual_level),
+                    'degraded': degraded,
                 }, "获取QQ歌曲URL成功")
             return APIResponse.error("获取QQ音乐URL失败，可能需要VIP或音质不支持", 404)
 
@@ -1468,7 +1488,7 @@ def qq_get_song_info():
             real_mid = song_data.get('mid', songmid)
             sid = int(song_data.get('id', 0))
 
-            url_result = qq_api.get_music_url(real_mid, level)
+            url_result, actual_level, degraded = _degrade_qq_quality(real_mid, level)
             raw_lyric = qq_api.get_music_lyric_new(sid) if sid else {}
             lyric_info = _adapt_lyric(raw_lyric)
 
@@ -1478,15 +1498,16 @@ def qq_get_song_info():
                 'ar_name': ', '.join(a['name'] for a in song_data.get('ar', [])),
                 'al_name': song_data.get('al', {}).get('name', ''),
                 'pic': song_data.get('al', {}).get('picUrl', ''),
-                'level': level,
+                'level': actual_level,
                 'lyric': lyric_info.get('lrc', {}).get('lyric', ''),
                 'tlyric': lyric_info.get('tlyric', {}).get('lyric', ''),
+                'degraded': degraded,
             }
             if url_result and url_result.get('url'):
                 response_data.update({
                     'url': url_result['url'],
                     'size': '',
-                    'level': level,
+                    'level': actual_level,
                 })
             else:
                 response_data.update({'url': '', 'size': '获取失败'})
@@ -1540,12 +1561,12 @@ def qq_download_music_api():
             return APIResponse.error("未找到QQ音乐信息", 404)
         real_mid = song_info['songs'][0].get('mid', songmid)
 
-        url_result = qq_api.get_music_url(real_mid, quality)
+        url_result, actual_quality, degraded = _degrade_qq_quality(real_mid, quality)
         if not url_result or not url_result.get('url'):
-            return APIResponse.error("无法获取QQ音乐下载链接", 404)
+            return APIResponse.error("无法获取QQ音乐下载链接，所有音质均不可用", 404)
 
         song_data = song_info['songs'][0]
-        ext = qq_api.file_config.get(quality, {}).get('e', '.mp3')
+        ext = qq_api.file_config.get(actual_quality, {}).get('e', '.mp3')
         music_info = {
             'id': songmid,
             'name': song_data['name'],
@@ -1558,7 +1579,7 @@ def qq_download_music_api():
             'download_url': url_result['url']
         }
 
-        safe_name = f"{music_info['name']} [{quality}]"
+        safe_name = f"{music_info['name']} [{actual_quality}]"
         safe_name = ''.join(c for c in safe_name if c not in r'<>:"/\|?*')
         filename = f"{safe_name}.{music_info['file_type']}"
         file_path = qq_downloader.download_dir / filename
@@ -1566,7 +1587,7 @@ def qq_download_music_api():
         if not file_path.exists():
             try:
                 download_result = qq_downloader.download_music_file(
-                    music_id, quality, cookies=_qq_get_cookies()
+                    music_id, actual_quality, cookies=_qq_get_cookies()
                 )
                 if not download_result.success:
                     return APIResponse.error(f"下载失败: {download_result.error_message}", 500)
@@ -1581,14 +1602,15 @@ def qq_download_music_api():
                 'name': music_info['name'],
                 'artist': music_info['artist_string'],
                 'album': music_info['album'],
-                'quality': quality,
-                'quality_name': _qq_get_quality_cn(quality),
+                'quality': actual_quality,
+                'quality_name': _qq_get_quality_cn(actual_quality),
                 'file_type': music_info['file_type'],
                 'file_size': music_info['file_size'],
                 'file_size_formatted': '0B',
                 'file_path': str(file_path.absolute()),
                 'filename': filename,
-                'duration': music_info['duration']
+                'duration': music_info['duration'],
+                'degraded': degraded,
             }, "下载完成")
         else:
             if not file_path.exists():
