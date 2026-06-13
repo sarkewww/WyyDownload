@@ -1,10 +1,11 @@
 """Cookie管理器模块
 
-提供网易云音乐Cookie管理功能，包括：
+提供多平台Cookie管理功能，支持：
+- 网易云音乐 (netease)
+- QQ音乐 (qq)
 - Cookie文件读取和写入
 - Cookie格式验证和解析
 - Cookie有效性检查
-- 自动过期处理
 """
 
 import time
@@ -20,138 +21,109 @@ class CookieException(Exception):
 
 
 class CookieManager:
-    """Cookie管理器主类"""
-    
-    def __init__(self, cookie_file: str = "cookie.txt"):
+    """Cookie管理器主类（多平台支持）"""
+
+    PLATFORM_CONFIG = {
+        'netease': {
+            'default_file': 'cookie.txt',
+            'important': {'MUSIC_U'},
+            'optional': {'MUSIC_A', '__csrf', 'NMTID', 'WEVNSM', 'WNMCID'},
+        },
+        'qq': {
+            'default_file': 'qqcookie.txt',
+            'important': {'uin', 'skey'},
+            'optional': {'p_uin', 'p_skey', 'pt4_token', 'p_luin', 'p_lskey'},
+        },
+    }
+
+    def __init__(self, cookie_file: str = None, platform: str = 'netease'):
         """
         初始化Cookie管理器
-        
+
         Args:
-            cookie_file: Cookie文件路径
+            cookie_file: Cookie文件路径，None则根据platform自动选择
+            platform: 平台标识 'netease' 或 'qq'
         """
-        self.cookie_file = Path(cookie_file)
+        if platform not in self.PLATFORM_CONFIG:
+            raise CookieException(f"不支持的平台: {platform}，支持: {list(self.PLATFORM_CONFIG.keys())}")
+
+        self.platform = platform
+        cfg = self.PLATFORM_CONFIG[platform]
+        self.cookie_file = Path(cookie_file or cfg['default_file'])
+        self.important_cookies = cfg['important']
+        self.optional_cookies = cfg['optional']
         self.logger = logging.getLogger('cookie_manager')
-        
-        # 网易云音乐相关的重要Cookie字段
-        self.important_cookies = {
-            'MUSIC_U',      # 用户标识（必须）
-        }
-        self.optional_cookies = {
-            'MUSIC_A',      # 用户认证
-            '__csrf',       # CSRF令牌
-            'NMTID',        # 设备标识
-            'WEVNSM',       # 会话管理
-            'WNMCID',       # 客户端标识
-        }
-        
-        # 确保cookie文件存在
+
         self._ensure_cookie_file_exists()
-    
+
     def _ensure_cookie_file_exists(self) -> None:
         """确保Cookie文件存在"""
         if not self.cookie_file.exists():
             self.cookie_file.touch()
-            self.logger.info(f"创建Cookie文件: {self.cookie_file}")
-    
+            self.logger.info(f"创建Cookie文件[{self.platform}]: {self.cookie_file}")
+
     def read_cookie(self) -> str:
-        """读取Cookie文件内容
-        
-        Returns:
-            Cookie字符串内容
-            
-        Raises:
-            CookieException: 读取失败时抛出
-        """
+        """读取Cookie文件内容"""
         try:
             if not self.cookie_file.exists():
                 self.logger.warning(f"Cookie文件不存在: {self.cookie_file}")
                 return ""
-            
+
             content = self.cookie_file.read_text(encoding='utf-8').strip()
-            
+
             if not content:
                 self.logger.warning("Cookie文件为空")
                 return ""
-            
-            self.logger.debug(f"成功读取Cookie文件，长度: {len(content)}")
+
+            self.logger.debug(f"成功读取Cookie文件[{self.platform}]，长度: {len(content)}")
             return content
-            
+
         except UnicodeDecodeError as e:
             raise CookieException(f"Cookie文件编码错误: {e}")
         except PermissionError as e:
             raise CookieException(f"没有权限读取Cookie文件: {e}")
         except Exception as e:
             raise CookieException(f"读取Cookie文件失败: {e}")
-    
+
     def write_cookie(self, cookie_content: str) -> bool:
-        """写入Cookie到文件
-        
-        Args:
-            cookie_content: Cookie内容字符串
-            
-        Returns:
-            是否写入成功
-            
-        Raises:
-            CookieException: 写入失败时抛出
-        """
+        """写入Cookie到文件"""
         try:
             if not cookie_content or not cookie_content.strip():
                 raise CookieException("Cookie内容不能为空")
-            
-            # 验证Cookie格式
+
             if not self.validate_cookie_format(cookie_content):
                 raise CookieException("Cookie格式无效")
-            
-            # 写入文件
+
             self.cookie_file.write_text(cookie_content.strip(), encoding='utf-8')
-            
-            self.logger.info(f"成功写入Cookie到文件: {self.cookie_file}")
+
+            self.logger.info(f"成功写入Cookie到文件[{self.platform}]: {self.cookie_file}")
             return True
-            
+
         except PermissionError as e:
             raise CookieException(f"没有权限写入Cookie文件: {e}")
         except Exception as e:
             raise CookieException(f"写入Cookie文件失败: {e}")
-    
+
     def parse_cookies(self) -> Dict[str, str]:
-        """解析Cookie字符串为字典
-        
-        Returns:
-            Cookie字典
-            
-        Raises:
-            CookieException: 解析失败时抛出
-        """
+        """解析Cookie字符串为字典"""
         try:
             cookie_content = self.read_cookie()
             if not cookie_content:
                 return {}
-            
             return self.parse_cookie_string(cookie_content)
-            
         except Exception as e:
             raise CookieException(f"解析Cookie失败: {e}")
-    
+
     def parse_cookie_string(self, cookie_string: str) -> Dict[str, str]:
-        """解析Cookie字符串
-        
-        Args:
-            cookie_string: Cookie字符串
-            
-        Returns:
-            Cookie字典
-        """
+        """解析Cookie字符串"""
         if not cookie_string or not cookie_string.strip():
             return {}
-        
+
         cookies = {}
-        
+
         try:
-            # 处理多种Cookie格式
             cookie_string = cookie_string.strip()
-            
-            # 分割Cookie项
+
             cookie_pairs = []
             if ';' in cookie_string:
                 cookie_pairs = cookie_string.split(';')
@@ -159,104 +131,84 @@ class CookieManager:
                 cookie_pairs = cookie_string.split('\n')
             else:
                 cookie_pairs = [cookie_string]
-            
+
             for pair in cookie_pairs:
                 pair = pair.strip()
                 if not pair or '=' not in pair:
                     continue
-                
-                # 分割键值对
+
                 key, value = pair.split('=', 1)
                 key = key.strip()
                 value = value.strip()
-                
+
                 if key and value:
                     cookies[key] = value
-            
-            self.logger.debug(f"解析得到 {len(cookies)} 个Cookie项")
+
+            self.logger.debug(f"解析得到 {len(cookies)} 个Cookie项[{self.platform}]")
             return cookies
-            
+
         except Exception as e:
             self.logger.error(f"解析Cookie字符串失败: {e}")
             return {}
-    
+
     def validate_cookie_format(self, cookie_string: str) -> bool:
-        """验证Cookie格式是否有效
-        
-        Args:
-            cookie_string: Cookie字符串
-            
-        Returns:
-            是否格式有效
-        """
+        """验证Cookie格式是否有效"""
         if not cookie_string or not cookie_string.strip():
             return False
-        
+
         try:
-            # 尝试解析Cookie
             cookies = self.parse_cookie_string(cookie_string)
-            
-            # 检查是否至少包含一个有效的Cookie
+
             if not cookies:
                 return False
-            
-            # 检查Cookie名称是否合法
+
             for name, value in cookies.items():
                 if not name or not isinstance(name, str):
                     return False
                 if not isinstance(value, str):
                     return False
-                # 检查是否包含非法字符
                 if any(char in name for char in [' ', '\t', '\n', '\r', ';', ',']):
                     return False
-            
+
             return True
-            
+
         except Exception:
             return False
-    
+
     def is_cookie_valid(self) -> bool:
-        """检查Cookie结构是否完整（仅验证格式，不调API验证时效性）
-        
-        Returns:
-            Cookie是否有效
-        """
+        """检查Cookie结构是否完整（仅验证格式，不调API验证时效性）"""
         try:
             cookies = self.parse_cookies()
-            
+
             if not cookies:
-                self.logger.warning("Cookie为空")
+                self.logger.warning(f"Cookie为空[{self.platform}]")
                 return False
-            
-            # 检查重要Cookie是否存在
+
             missing_cookies = self.important_cookies - set(cookies.keys())
             if missing_cookies:
-                self.logger.warning(f"缺少重要Cookie: {missing_cookies}")
+                self.logger.warning(f"缺少重要Cookie[{self.platform}]: {missing_cookies}")
                 return False
-            
-            # 检查MUSIC_U是否有效（基本验证）
-            music_u = cookies.get('MUSIC_U', '')
-            if not music_u or len(music_u) < 10:
-                self.logger.warning("MUSIC_U Cookie无效")
-                return False
-            
-            self.logger.debug("Cookie验证通过")
+
+            for key in self.important_cookies:
+                val = cookies.get(key, '')
+                if not val or len(val) < 3:
+                    self.logger.warning(f"{key} Cookie无效[{self.platform}]")
+                    return False
+
+            self.logger.debug(f"Cookie验证通过[{self.platform}]")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Cookie验证失败: {e}")
             return False
-    
+
     def get_cookie_info(self) -> Dict[str, Any]:
-        """获取Cookie详细信息
-        
-        Returns:
-            包含Cookie信息的字典
-        """
+        """获取Cookie详细信息"""
         try:
             cookies = self.parse_cookies()
-            
+
             info = {
+                'platform': self.platform,
                 'file_path': str(self.cookie_file),
                 'file_exists': self.cookie_file.exists(),
                 'file_size': self.cookie_file.stat().st_size if self.cookie_file.exists() else 0,
@@ -268,50 +220,43 @@ class CookieManager:
                 'missing_optional_cookies': list(self.optional_cookies - set(cookies.keys())),
                 'all_cookie_names': list(cookies.keys())
             }
-            
-            # 添加文件修改时间
+
             if self.cookie_file.exists():
                 mtime = self.cookie_file.stat().st_mtime
                 info['last_modified'] = datetime.fromtimestamp(mtime).isoformat()
-            
+
             return info
-            
+
         except Exception as e:
             return {
                 'error': str(e),
+                'platform': self.platform,
                 'file_path': str(self.cookie_file),
                 'file_exists': False,
                 'is_valid': False
             }
 
     def __str__(self) -> str:
-        """字符串表示"""
         info = self.get_cookie_info()
-        return f"CookieManager(file={info['file_path']}, valid={info['is_valid']}, count={info['cookie_count']})"
-    
+        return f"CookieManager(platform={info.get('platform')}, file={info['file_path']}, valid={info['is_valid']}, count={info['cookie_count']})"
+
     def __repr__(self) -> str:
-        """详细字符串表示"""
         return self.__str__()
 
 
 if __name__ == "__main__":
-    # 测试代码
     import sys
-    
-    # 配置日志
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
+
     manager = CookieManager()
-    
     print("Cookie管理器模块")
     print("支持的功能:")
+    print("- 多平台Cookie管理 (netease / qq)")
     print("- Cookie文件读写")
     print("- Cookie格式验证")
     print("- Cookie有效性检查")
-    print("- Cookie备份和恢复")
-    print("- Cookie信息查看")
-    
-    # 显示当前Cookie信息
+
     info = manager.get_cookie_info()
     print(f"\n当前Cookie状态: {manager}")
     print(f"详细信息: {info}")

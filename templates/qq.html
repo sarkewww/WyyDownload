@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QQ音乐工具箱</title>
+<link href="/static/bootstrap.min.css" rel="stylesheet">
+<link href="/static/aplayer.min.css" rel="stylesheet">
+<style>
+:root{--bg:#f4f5f7;--surface:#fff;--border:#e5e7eb;--text:#1f2937;--muted:#6b7280;--accent:#31c27c;--accent-h:#2caf6c;--green:#059669;--red:#dc2626;--orange:#ea580c;--cyan:#0891b2;--radius:10px;--shadow:0 1px 3px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04)}
+[data-theme=dark]{--bg:#0f0f14;--surface:#1a1a24;--border:rgba(255,255,255,.08);--text:#e4e4ec;--muted:#8a8aa0;--accent:#31c27c;--accent-h:#2caf6c;--green:#00d2a0;--red:#ff6b6b;--orange:#ffa94d;--cyan:#3bc9db;--shadow:0 1px 3px rgba(0,0,0,.3),0 4px 20px rgba(0,0,0,.25)}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;margin:0;transition:background .3s,color .3s}
+.container{max-width:880px;padding:16px 12px}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.card,.cookie-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);transition:background .3s,border .3s}
+.card{padding:20px;margin-bottom:14px}
+.cookie-bar{padding:8px 14px;margin-bottom:10px;display:flex;align-items:center;gap:8px;font-size:13px}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot-ok{background:var(--green)}.dot-no{background:var(--red)}.dot-check{background:var(--muted);animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.btn{border-radius:8px;font-weight:500;font-size:14px;padding:8px 18px;transition:all .15s;border:1px solid transparent;cursor:pointer}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-h);box-shadow:0 2px 8px rgba(49,194,124,.25)}
+.btn-success{background:var(--green);color:#fff}.btn-danger{background:var(--red);color:#fff}
+.btn-sm{padding:5px 12px;font-size:13px;border-radius:7px}.btn-xs{padding:3px 9px;font-size:12px;border-radius:6px}
+.btn-outline-primary{color:var(--accent);border-color:var(--accent)}.btn-outline-primary:hover{background:var(--accent);color:#fff}
+.btn-outline-secondary{color:var(--muted);border-color:var(--border)}.btn-outline-secondary:hover{background:var(--muted);color:#fff}
+.btn-outline-danger{color:var(--red);border-color:var(--red)}.btn-outline-danger:hover{background:var(--red);color:#fff}
+.form-control,.form-select{border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-size:14px;transition:all .15s;background:var(--surface);color:var(--text)}
+.form-control:focus,.form-select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(49,194,124,.1);outline:none}
+.form-label{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:5px}
+.badge{font-weight:500;font-size:11px;padding:4px 9px;border-radius:6px}
+.bg-success{background:var(--green)!important}.bg-danger{background:var(--red)!important}.bg-primary{background:var(--accent)!important}
+.bg-secondary{background:#e5e7eb!important;color:var(--muted)!important}[data-theme=dark] .bg-secondary{background:rgba(255,255,255,.08)!important}
+.bg-warning{background:#fef3c7!important;color:var(--orange)!important}.bg-info{background:#cffafe!important;color:var(--cyan)!important}
+.tab-bar{display:flex;gap:4px;margin-bottom:14px}
+.tab-btn{flex:1;padding:7px 4px;border:none;background:transparent;border-radius:8px;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;transition:all .15s}
+.tab-btn.active{background:var(--surface);color:var(--accent);box-shadow:0 1px 3px rgba(0,0,0,.06)}.tab-btn:hover:not(.active):not([disabled]){color:var(--text)}
+.tab-btn[disabled]{color:var(--muted);opacity:0.4;cursor:not-allowed}
+.search-type-tabs{display:flex;gap:4px;margin-bottom:12px}
+.search-type-tabs button{flex:1;padding:5px 4px;border:1px solid var(--border);border-radius:7px;background:transparent;font-size:12px;color:var(--muted);cursor:pointer;transition:all .12s}
+.search-type-tabs button.active{border-color:var(--accent);color:var(--accent);background:rgba(49,194,124,.06)}
+.panel{display:none}.panel.active{display:block}
+.list-group-item{background:var(--surface);border-color:var(--border)!important;padding:10px 14px!important;transition:background .1s}.list-group-item:hover{background:var(--border)}
+.song-title{display:inline-block;max-width:170px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;color:var(--text)}
+.lyric-box{max-height:180px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:14px;line-height:1.8}
+.lyric-mode-btn.active{background:var(--accent)!important;color:#fff!important}
+.result-section{animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.table{color:var(--text)}.table th{font-size:11px;font-weight:600;color:var(--muted);border-color:var(--border)!important}
+.table td{border-color:var(--border)!important;vertical-align:middle;font-size:13px;color:var(--text)!important}
+.table-striped>tbody>tr:nth-of-type(even){background:var(--surface)}.table-striped>tbody>tr:nth-of-type(odd){background:var(--bg)}
+[data-theme=dark] .table-striped>tbody>tr:nth-of-type(even){background:var(--surface)}
+[data-theme=dark] .table-striped>tbody>tr:nth-of-type(odd){background:rgba(255,255,255,.03)}
+.table-hover>tbody>tr:hover{background:var(--border)}.table img.cover-thumb{cursor:pointer;transition:opacity .15s}.table img.cover-thumb:hover{opacity:.7}
+.progress{background:var(--bg);border-radius:6px;height:6px}.progress-bar{background:var(--accent);border-radius:6px;transition:width .3s}
+.file-progress{display:flex;align-items:center;gap:6px;margin:3px 0}.file-progress .name{font-size:11px;width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-progress .bar{flex:1;height:4px;border-radius:2px;background:var(--bg);overflow:hidden}.file-progress .bar div{height:100%;border-radius:2px;transition:width .2s}
+.file-progress .sz{font-size:10px;color:var(--muted);width:60px;text-align:right}
+#files-progress-container .file-progress.done .bar div{background:var(--green)}
+#files-progress-container .file-progress.failed .bar div{background:var(--red)}
+#files-progress-container .file-progress.downloading .bar div{background:var(--cyan)}
+.toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;box-shadow:0 4px 16px rgba(0,0,0,.12);font-size:13px;max-width:320px;animation:toastIn .25s ease}.toast.success{border-left:3px solid var(--green)}.toast.error{border-left:3px solid var(--red)}.toast.info{border-left:3px solid var(--accent)}
+@keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+.dashboard-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.dashboard-grid .dash-card{padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);transition:all .15s}
+.dashboard-grid .dash-card:hover{border-color:var(--accent)}
+.dl-history{max-height:200px;overflow-y:auto}.dl-history .item{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px}
+.dl-history .item:last-child{border-bottom:none}
+.modal-content{border-radius:var(--radius);border:1px solid var(--border);background:var(--surface)}.modal-header{border-color:var(--border)}
+input[type=checkbox]{accent-color:var(--accent)}footer{color:var(--muted);font-size:12px;border-top:1px solid var(--border)!important}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
+.theme-toggle{cursor:pointer;font-size:18px;line-height:1;border:none;background:transparent;color:var(--muted);transition:color .2s}.theme-toggle:hover{color:var(--text)}
+.history-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:8px}
+.history-tags span{font-size:11px;padding:3px 8px;border-radius:5px;background:var(--bg);color:var(--muted);cursor:pointer;transition:all .12s;border:1px solid var(--border)}.history-tags span:hover{color:var(--accent);border-color:var(--accent)}
+.suggest-dropdown{position:absolute;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:160px;overflow-y:auto;z-index:100;display:none;width:100%}
+.suggest-dropdown .item{padding:8px 12px;cursor:pointer;font-size:13px;color:var(--text)}.suggest-dropdown .item:hover,.suggest-dropdown .item.active{background:var(--bg);color:var(--accent)}
+.copied{color:var(--green)!important}
+@media(max-width:768px){.container{padding:8px 6px}.card{padding:14px}.dashboard-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+    <h3 style="font-weight:700;margin:0;letter-spacing:-.02em">QQ音乐工具箱</h3>
+    <button class="theme-toggle" id="theme-toggle" title="切换模式">🌙</button>
+</div>
+<div class="toast-container" id="toast-container"></div>
+
+<div class="cookie-bar">
+    <div class="dot dot-check" id="cookie-dot"></div>
+    <span class="flex-grow-1"><span id="cookie-bar-text">检测Cookie...</span><span class="text-sm" style="margin-left:6px" id="cookie-bar-extra"></span></span>
+    <button class="btn btn-xs btn-outline-secondary" id="cookie-expand-btn">展开</button>
+</div>
+<div class="card d-none mb-3" id="cookie-editor">
+    <label class="form-label">QQ音乐 Cookie</label>
+    <div style="display:flex;gap:8px"><input type="text" id="cookie-text" class="form-control" placeholder="uin=xxx; skey=xxx; ..."></div>
+    <div class="mt-2"><button class="btn btn-sm btn-success" id="cookie-save-btn">保存</button><button class="btn btn-sm btn-outline-secondary ms-2" id="cookie-refresh-btn">刷新</button></div>
+</div>
+
+<div class="tab-bar" id="tab-bar">
+    <button class="tab-btn active" data-tab="home">首页</button><button class="tab-btn" data-tab="search" disabled>搜索</button><button class="tab-btn" data-tab="parse">单曲</button><button class="tab-btn" data-tab="playlist" disabled>歌单</button><button class="tab-btn" data-tab="album" disabled>专辑</button><button class="tab-btn" data-tab="download">下载</button>
+</div>
+
+<div id="panels">
+
+<div class="panel active" id="panel-home">
+    <div class="dashboard-grid">
+        <div class="dash-card">
+            <h5 style="margin-top:0">Cookie 状态</h5>
+            <div id="dash-cookie-status" class="text-sm" style="color:var(--muted)">加载中...</div>
+            <div class="mt-2"><button class="btn btn-xs btn-outline-secondary" id="dash-cookie-edit-btn">手动填写</button></div>
+        </div>
+        <div class="dash-card">
+            <h5 style="margin-top:0">快捷功能</h5>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+                <button class="btn btn-xs btn-outline-primary" data-tab="parse">单曲</button><button class="btn btn-xs btn-outline-primary" data-tab="download">下载</button>
+                <button class="btn btn-xs btn-outline-secondary" disabled>搜索</button><button class="btn btn-xs btn-outline-secondary" disabled>歌单</button><button class="btn btn-xs btn-outline-secondary" disabled>专辑</button>
+            </div>
+        </div>
+        <div class="dash-card">
+            <h5 style="margin-top:0">下载记录 <a href="#" id="dl-clear-btn" class="text-sm" style="float:right;color:var(--muted)">清空</a></h5>
+            <div class="dl-history" id="dl-history"><span class="text-sm" style="color:var(--muted)">暂无记录</span></div>
+        </div>
+        <div class="dash-card">
+            <h5 style="margin-top:0">关于</h5>
+            <p class="text-sm" style="color:var(--muted);margin:0">支持QQ音乐多音质下载（标准/HQ/SQ/母带）</p>
+            <p class="text-sm mt-1" style="color:var(--muted);margin:0">Cookie须包含 uin + skey 字段 | <a href="/">切换到网易云</a></p>
+        </div>
+    </div>
+</div>
+
+<div class="panel" id="panel-search">
+    <div class="card">
+        <div class="mb-3" style="position:relative"><label class="form-label">关键词</label><input type="text" id="search_keywords" class="form-control" placeholder="歌名/歌手/专辑..." disabled></div>
+        <button id="search-btn" class="btn btn-primary w-100" disabled>搜索（开发中）</button>
+    </div>
+</div>
+
+<div class="panel" id="panel-parse">
+    <div class="card">
+        <div class="mb-3"><label class="form-label">歌曲 songmid 或链接</label><input type="text" id="song_ids" class="form-control" placeholder="songmid 或 https://y.qq.com/n/ryqq/songDetail/004YZbkL2MNHoY"></div>
+        <div class="mb-3"><label class="form-label">音质</label><select id="level" class="form-select">
+            <option value="flac" selected>SQ无损品质 (FLAC)</option><option value="320">HQ高品质 (320kbps)</option><option value="128">标准 (128kbps)</option><option value="master">臻品母带3.0</option><option value="atmos_2">臻品全景声2.0</option><option value="hires">Hi-Res</option>
+        </select></div>
+        <button id="parse-btn" class="btn btn-primary w-100">解析</button>
+    </div>
+    <div id="song-info" class="d-none result-section card">
+        <h4 id="song_name" style="font-weight:700;margin-bottom:4px"></h4>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">
+            <span class="badge bg-primary">歌手 <span id="artist_names"></span></span><span class="badge bg-secondary">专辑 <span id="song_alname"></span></span><span class="badge bg-success">音质 <span id="song_level"></span></span><span class="badge bg-warning">大小 <span id="song_size"></span></span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
+            <button id="show-big-pic" class="btn btn-xs btn-outline-secondary">封面</button>
+            <button id="download-lyric-btn" class="btn btn-xs btn-outline-secondary">歌词</button>
+            <span class="text-sm">|</span>
+            <button class="btn btn-xs lyric-mode-btn active" data-mode="orig">原文</button><button class="btn btn-xs lyric-mode-btn" data-mode="trans">翻译</button><button class="btn btn-xs lyric-mode-btn" data-mode="both">双语</button>
+            <a id="song_url" href="" target="_blank" style="font-size:13px;margin-left:auto">点击下载</a>
+        </div>
+        <div class="lyric-box" id="lyric"></div><div id="aplayer" class="mt-2"></div>
+    </div>
+</div>
+
+<div class="panel" id="panel-playlist">
+    <div class="card p-5 text-center">
+        <h5 style="color:var(--muted)">歌单功能开发中</h5>
+        <p class="text-sm" style="color:var(--muted)">QQ音乐歌单API正在调研适配中，敬请期待。</p>
+        <p class="text-sm"><a href="/">切换到网易云使用歌单功能</a></p>
+    </div>
+</div>
+
+<div class="panel" id="panel-album">
+    <div class="card p-5 text-center">
+        <h5 style="color:var(--muted)">专辑功能开发中</h5>
+        <p class="text-sm" style="color:var(--muted)">QQ音乐专辑API正在调研适配中，敬请期待。</p>
+        <p class="text-sm"><a href="/">切换到网易云使用专辑功能</a></p>
+    </div>
+</div>
+
+<div class="panel" id="panel-download"><div class="card">
+    <div class="mb-3"><label class="form-label">歌曲 songmid 或链接</label><input type="text" id="download_id" class="form-control" placeholder="songmid 或链接"></div>
+    <div class="mb-3"><label class="form-label">音质</label><select id="download_quality" class="form-select"><option value="flac" selected>SQ无损品质 (FLAC)</option><option value="320">HQ高品质 (320kbps)</option><option value="128">标准 (128kbps)</option><option value="master">臻品母带3.0</option><option value="atmos_2">臻品全景声2.0</option><option value="hires">Hi-Res</option></select></div>
+    <button id="download-btn" class="btn btn-success w-100">下载</button>
+    <div id="download-progress" class="mt-2 d-none"><div class="progress" style="height:6px"><div class="progress-bar progress-bar-animated" style="width:100%"></div></div><div class="text-center mt-1 text-sm" style="color:var(--muted)">下载中...</div></div>
+</div></div>
+</div></div>
+
+<footer class="text-center py-3 mt-3">QQ音乐工具箱 · <a href="/">切换到网易云</a></footer>
+
+<div class="modal fade" id="bigPicModal"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">封面</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-center"><img id="big-pic-img" src="" style="max-width:100%;max-height:65vh;border-radius:8px"></div></div></div></div>
+
+<script src="/static/jquery.min.js"></script>
+<script src="/static/aplayer.min.js"></script>
+<script src="/static/bootstrap.bundle.min.js"></script>
+<script>
+$(function(){
+var ap=null,currentLyric='',currentTLyric='',currentLyricMode='orig';
+var API='/qq';
+function lrctrim(l){var r=[],ls=l.split('\n');ls.forEach(function(ln){var m=ln.match(/\[(\d{2}):(\d{2}[\.:]?\d*)]/);if(m){var mn=parseInt(m[1]),s=parseFloat(m[2].replace('.',':'))||0;var t=ln.replace(/\[\d{2}:\d{2}[\.:]?\d*\]/g,'').trim().replace(/\s\s+/g,' ');r.push([mn*60000+s*1000,0,t])}});return r.sort(function(a,b){return a[0]-b[0]})}
+function lrctran(ly,tl){ly=lrctrim(ly);tl=lrctrim(tl);var res='';for(var i=0,j=0;i<ly.length&&j<tl.length;i++){while(ly[i][0]-tl[j][0]>50&&j+1<tl.length)j++;if(Math.abs(ly[i][0]-tl[j][0])<=50){tl[j][2]=tl[j][2].replace(/\//g,'');if(tl[j][2])ly[i][2]+='(翻译:'+tl[j][2]+')';j++}}for(i=0;i<ly.length;i++){var t=ly[i][0];res+='['+String(Math.floor(t/60000)).padStart(2,'0')+':'+String(Math.floor((t%60000)/1000)).padStart(2,'0')+'.'+String(t%1000).padStart(3,'0')+']'+ly[i][2]+'\n'}return res}
+function fmtSize(b){if(b>=1073741824)return (b/1073741824).toFixed(1)+' GB';if(b>=1048576)return (b/1048576).toFixed(1)+' MB';if(b>=1024)return (b/1024).toFixed(1)+' KB';return b+' B'}
+function toast(msg,type){type=type||'info';var t=$('<div class="toast '+type+'">'+msg+'</div>');$('#toast-container').append(t);setTimeout(function(){t.fadeOut(300,function(){t.remove()})},3000)}
+
+var theme=localStorage.getItem('qq_theme')||'light';$('html').attr('data-theme',theme);$('#theme-toggle').text(theme==='dark'?'☀️':'🌙');
+$('#theme-toggle').on('click',function(){var t=$('html').attr('data-theme')==='dark'?'light':'dark';$('html').attr('data-theme',t);$('#theme-toggle').text(t==='dark'?'☀️':'🌙');localStorage.setItem('qq_theme',t)});
+
+function loadDlHistory(){$.get('/qq/dl/history',function(d){if(d.status!==200)return;var h=d.data||[],c=$('#dl-history').empty();if(!h.length){c.html('<span class="text-sm" style="color:var(--muted)">暂无记录</span>');return}h.forEach(function(e){c.append('<div class="item"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">'+e.name+'</span><span class="text-sm" style="color:var(--muted);margin:0 8px">'+e.time+'</span></div>')})})}
+loadDlHistory();
+$('#dl-clear-btn').on('click',function(e){e.preventDefault();if(!confirm('清空所有下载记录？'))return;$.ajax({url:'/qq/dl/history',method:'DELETE',success:function(){loadDlHistory();toast('已清空','info')}})});
+
+function switchTab(name){$('#tab-bar .tab-btn[data-tab='+name+']').click();$('html,body').animate({scrollTop:0},200)}
+$('#tab-bar').on('click','.tab-btn:not([disabled])',function(){var t=$(this).data('tab');$('#tab-bar .tab-btn').removeClass('active');$(this).addClass('active');$('.panel').removeClass('active');$('#panel-'+t).addClass('active')});
+$('#dash-cookie-edit-btn').on('click',function(){$('#cookie-editor').removeClass('d-none')});
+$(document).on('click','.dash-card button[data-tab]',function(){switchTab($(this).data('tab'))});
+
+function loadCookie(){$.get(API+'/cookie',function(r){if(r.status===200){var d=r.data,ok=d.is_valid;$('#cookie-dot').removeClass('dot-ok dot-no dot-check').addClass(ok?'dot-ok':'dot-no');$('#cookie-bar-text').text(ok?'Cookie 有效':'Cookie 无效');$('#cookie-bar-extra').text(ok?d.important_cookies_present.length+' 项可用':'需要配置').css('color',ok?'var(--green)':'var(--red)');$('#cookie-text').val(d.raw_content||'');$('#dash-cookie-status').html(ok?'<span style="color:var(--green)">✓ Cookie 有效 ('+d.cookie_count+' 项)</span>':'<span style="color:var(--red)">✗ Cookie 无效，请填写 uin + skey</span>');if(!ok)toast('Cookie 可能已过期，请重新获取','error')}else{$('#cookie-dot').addClass('dot-no');$('#cookie-bar-text').text('检测失败')}}).fail(function(){$('#cookie-dot').addClass('dot-no');$('#cookie-bar-text').text('连接失败')})}
+loadCookie();$('#cookie-expand-btn').on('click',function(){$('#cookie-editor').toggleClass('d-none')});
+$('#cookie-save-btn').on('click',function(){var v=$('#cookie-text').val().trim();if(!v)return toast('请输入Cookie','error');$.post(API+'/cookie',{cookie:v},function(r){if(r.status===200){toast('Cookie已保存','success');$('#cookie-editor').addClass('d-none');loadCookie()}else toast(r.message||'保存失败','error')}).fail(function(){toast('请求失败','error')})});
+$('#cookie-refresh-btn').on('click',function(){loadCookie();toast('已刷新','info')});
+
+$('#parse-btn').on('click',function(){var id=$('#song_ids').val(),lv=$('#level').val();if(!id)return toast('请输入songmid或链接','error');$.post(API+'/song',{id:id,level:lv,type:'json'},function(d){if(d.status===200){$('#song_name').text(d.data.name);$('#artist_names').text(d.data.ar_name);$('#song_alname').text(d.data.al_name);$('#song_level').text(d.data.level);$('#song_size').text(d.data.size);currentLyric=d.data.lyric||'';currentTLyric=d.data.tlyric||'';currentLyricMode='orig';$('.lyric-mode-btn').removeClass('active');$('.lyric-mode-btn[data-mode=orig]').addClass('active');updateLyricDisplay();$('#song_url').attr('href',d.data.url).text(d.data.url?'点击下载':'无链接');$('#song-info').removeClass('d-none').data('song-id',d.data.id);$('#show-big-pic').data('pic',d.data.pic);if(ap){ap.destroy()}ap=new APlayer({container:document.getElementById('aplayer'),lrcType:1,audio:[{name:d.data.name,artist:d.data.ar_name,url:d.data.url,cover:d.data.pic,lrc:lrctran(currentLyric,currentTLyric)}]})}else toast(d.message||'解析失败','error')},'json')});
+function updateLyricDisplay(){var t='';if(currentLyricMode==='orig')t=currentLyric;else if(currentLyricMode==='trans')t=currentTLyric||'(无翻译)';else t=currentTLyric?lrctran(currentLyric,currentTLyric):currentLyric;$('#lyric').html((t||'(无歌词)').replace(/\n/g,'<br>'))}
+$('.lyric-mode-btn').on('click',function(){currentLyricMode=$(this).data('mode');$('.lyric-mode-btn').removeClass('active');$(this).addClass('active');updateLyricDisplay()});
+$('#show-big-pic').on('click',function(){$('#big-pic-img').attr('src',$(this).data('pic'));new bootstrap.Modal('#bigPicModal').show()});
+$('#download-lyric-btn').on('click',function(){var sid=$('#song-info').data('song-id');if(!sid)return toast('请先解析','error');var a=document.createElement('a');a.href=API+'/lyric/download?id='+sid;document.body.appendChild(a);a.click();document.body.removeChild(a)});
+
+$('#download-btn').on('click',function(){var mid=$('#download_id').val().trim(),q=$('#download_quality').val();if(!mid)return toast('请输入songmid或链接','error');$('#download-progress').removeClass('d-none');$(this).prop('disabled',true).text('下载中...');var x=new XMLHttpRequest();x.open('POST',API+'/download',true);x.responseType='blob';x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.onload=function(){if(x.status===200){var fn='music.'+(q==='flac'?'flac':'mp3');var u=URL.createObjectURL(x.response);var a=document.createElement('a');a.href=u;a.download=fn;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(u);$.post('/qq/dl/history',{name:$('#download_id').val().trim(),song_id:$('#download_id').val().trim(),quality:q});toast('下载完成','success')}else toast('下载失败','error');$('#download-progress').addClass('d-none');$('#download-btn').prop('disabled',false).text('下载')};x.onerror=function(){$('#download-progress').addClass('d-none');$('#download-btn').prop('disabled',false).text('下载')};x.send('id='+encodeURIComponent(mid)+'&quality='+encodeURIComponent(q)+'&format=file')});
+});
+</script>
+</body>
+</html>

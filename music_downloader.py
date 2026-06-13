@@ -719,9 +719,10 @@ class Database:
             conn = self._conn()
             try:
                 cur = conn.execute(sql, params)
+                rows = cur.fetchall()
                 if commit:
                     conn.commit()
-                return cur
+                return rows
             finally:
                 conn.close()
 
@@ -732,6 +733,7 @@ class Database:
                 name TEXT NOT NULL,
                 song_id TEXT NOT NULL,
                 quality TEXT DEFAULT '',
+                platform TEXT DEFAULT 'netease',
                 created_at TEXT NOT NULL
             )
         """)
@@ -740,9 +742,44 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 keyword TEXT NOT NULL,
                 search_type TEXT DEFAULT '1',
+                platform TEXT DEFAULT 'netease',
                 created_at TEXT NOT NULL
             )
         """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS qq_download_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                song_id TEXT NOT NULL,
+                quality TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS qq_search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                search_type TEXT DEFAULT '1',
+                created_at TEXT NOT NULL
+            )
+        """)
+        self._migrate_columns()
+
+    def _migrate_columns(self):
+        try:
+            cols = self._execute("PRAGMA table_info(download_history)", commit=False)
+            col_names = [c[1] for c in cols]
+            if 'platform' not in col_names:
+                self._execute("ALTER TABLE download_history ADD COLUMN platform TEXT DEFAULT 'netease'")
+        except Exception:
+            pass
+        try:
+            cols = self._execute("PRAGMA table_info(search_history)", commit=False)
+            col_names = [c[1] for c in cols]
+            if 'platform' not in col_names:
+                self._execute("ALTER TABLE search_history ADD COLUMN platform TEXT DEFAULT 'netease'")
+        except Exception:
+            pass
 
     def _trim(self, table: str, max_rows: int):
         conn = self._conn()
@@ -757,18 +794,75 @@ class Database:
         finally:
             conn.close()
 
-    def add_download(self, name: str, song_id: str, quality: str = ''):
+    def add_download(self, name: str, song_id: str, quality: str = '', platform: str = 'netease'):
         self._execute(
-            "INSERT INTO download_history (name, song_id, quality, created_at) VALUES (?, ?, ?, ?)",
-            (name, str(song_id), quality, time.strftime('%Y-%m-%d %H:%M:%S'))
+            "INSERT INTO download_history (name, song_id, quality, platform, created_at) VALUES (?, ?, ?, ?, ?)",
+            (name, str(song_id), quality, platform, time.strftime('%Y-%m-%d %H:%M:%S'))
         )
         self._trim('download_history', 50)
 
-    def get_downloads(self, limit: int = 50) -> list:
+    def get_downloads(self, limit: int = 50, platform: str = None) -> list:
+        conn = self._conn()
+        try:
+            if platform:
+                rows = conn.execute(
+                    "SELECT name, song_id, quality, platform, created_at FROM download_history WHERE platform=? ORDER BY id DESC LIMIT ?",
+                    (platform, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT name, song_id, quality, platform, created_at FROM download_history ORDER BY id DESC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+            return [{'name': r['name'], 'song_id': r['song_id'],
+                     'quality': r['quality'], 'platform': r['platform'],
+                     'time': r['created_at']} for r in rows]
+        finally:
+            conn.close()
+
+    def clear_downloads(self):
+        self._execute("DELETE FROM download_history")
+
+    def add_search(self, keyword: str, search_type: str = '1', platform: str = 'netease'):
+        self._execute(
+            "INSERT INTO search_history (keyword, search_type, platform, created_at) VALUES (?, ?, ?, ?)",
+            (keyword, search_type, platform, time.strftime('%Y-%m-%d %H:%M:%S'))
+        )
+        self._trim('search_history', 50)
+
+    def get_searches(self, limit: int = 50, platform: str = None) -> list:
+        conn = self._conn()
+        try:
+            if platform:
+                rows = conn.execute(
+                    "SELECT keyword, search_type, platform, created_at FROM search_history WHERE platform=? ORDER BY id DESC LIMIT ?",
+                    (platform, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT keyword, search_type, platform, created_at FROM search_history ORDER BY id DESC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+            return [{'keyword': r['keyword'], 'type': r['search_type'],
+                     'platform': r['platform'], 'time': r['created_at']} for r in rows]
+        finally:
+            conn.close()
+
+    def clear_searches(self):
+        self._execute("DELETE FROM search_history")
+
+    def add_qq_download(self, name: str, song_id: str, quality: str = ''):
+        self._execute(
+            "INSERT INTO qq_download_history (name, song_id, quality, created_at) VALUES (?, ?, ?, ?)",
+            (name, str(song_id), quality, time.strftime('%Y-%m-%d %H:%M:%S'))
+        )
+        self._trim('qq_download_history', 50)
+
+    def get_qq_downloads(self, limit: int = 50) -> list:
         conn = self._conn()
         try:
             rows = conn.execute(
-                "SELECT name, song_id, quality, created_at FROM download_history ORDER BY id DESC LIMIT ?",
+                "SELECT name, song_id, quality, created_at FROM qq_download_history ORDER BY id DESC LIMIT ?",
                 (limit,)
             ).fetchall()
             return [{'name': r['name'], 'song_id': r['song_id'],
@@ -776,21 +870,21 @@ class Database:
         finally:
             conn.close()
 
-    def clear_downloads(self):
-        self._execute("DELETE FROM download_history")
+    def clear_qq_downloads(self):
+        self._execute("DELETE FROM qq_download_history")
 
-    def add_search(self, keyword: str, search_type: str = '1'):
+    def add_qq_search(self, keyword: str, search_type: str = '1'):
         self._execute(
-            "INSERT INTO search_history (keyword, search_type, created_at) VALUES (?, ?, ?)",
+            "INSERT INTO qq_search_history (keyword, search_type, created_at) VALUES (?, ?, ?)",
             (keyword, search_type, time.strftime('%Y-%m-%d %H:%M:%S'))
         )
-        self._trim('search_history', 50)
+        self._trim('qq_search_history', 50)
 
-    def get_searches(self, limit: int = 50) -> list:
+    def get_qq_searches(self, limit: int = 50) -> list:
         conn = self._conn()
         try:
             rows = conn.execute(
-                "SELECT keyword, search_type, created_at FROM search_history ORDER BY id DESC LIMIT ?",
+                "SELECT keyword, search_type, created_at FROM qq_search_history ORDER BY id DESC LIMIT ?",
                 (limit,)
             ).fetchall()
             return [{'keyword': r['keyword'], 'type': r['search_type'],
@@ -798,8 +892,8 @@ class Database:
         finally:
             conn.close()
 
-    def clear_searches(self):
-        self._execute("DELETE FROM search_history")
+    def clear_qq_searches(self):
+        self._execute("DELETE FROM qq_search_history")
 
 
 if __name__ == "__main__":
