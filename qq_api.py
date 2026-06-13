@@ -12,8 +12,11 @@
 import json
 import base64
 import logging
+import random
+import re
+import time
 import urllib.parse
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 import requests
 
@@ -97,13 +100,13 @@ class QQMusicAPI:
                 return m.group(1)
         return str(id_or_url).strip()
 
-    def _request(self, url: str, post_data=None) -> str:
+    def _request(self, url: str, post_data=None, use_cookies: bool = True) -> str:
         headers = {
             'User-Agent': QQAPIConstants.USER_AGENT,
         }
         if post_data:
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
-        if self.cookies:
+        if use_cookies and self.cookies:
             cookie_str = '; '.join(f'{k}={v}' for k, v in self.cookies.items())
             headers['Cookie'] = cookie_str
 
@@ -149,9 +152,15 @@ class QQMusicAPI:
         }
 
         try:
+            has_cookie = bool(self.cookies)
             response_text = self._request(QQAPIConstants.BASE_URL, json.dumps(payload))
             data = json.loads(response_text)
             purl = data.get('req_1', {}).get('data', {}).get('midurlinfo', [{}])[0].get('purl', '')
+
+            if not purl and has_cookie:
+                response_text = self._request(QQAPIConstants.BASE_URL, json.dumps(payload), use_cookies=False)
+                data = json.loads(response_text)
+                purl = data.get('req_1', {}).get('data', {}).get('midurlinfo', [{}])[0].get('purl', '')
 
             if not purl:
                 return None
@@ -273,6 +282,92 @@ class QQMusicAPI:
 
     def get_quality_display_name(self, quality: str) -> str:
         return QQAPIConstants.QUALITY_DISPLAY.get(quality, quality)
+
+    @staticmethod
+    def _hash33(s: str) -> int:
+        h = 0
+        for c in s:
+            h = (h << 5) + h + ord(c)
+            h &= 0xFFFFFFFF
+        return h & 0x7FFFFFFF
+
+    def get_qr_code(self) -> Optional[Dict[str, Any]]:
+        t = random.randint(0, 9999999) / 10000000
+        url = (f'https://xui.ptlogin2.qq.com/ssl/ptqrshow'
+               f'?appid=716027609&e=2&l=M&s=3&d=72&v=4&t={t}'
+               f'&daid=383&pt_3rd_aid=100497308'
+               f'&u1=https%3A%2F%2Fgraph.qq.com%2Foauth2.0%2Flogin_jump')
+        try:
+            sess = requests.Session()
+            headers = {
+                'User-Agent': 'Mozilla/5.0 Chrome/149.0.0.0',
+                'Referer': 'https://xui.ptlogin2.qq.com/cgi-bin/xlogin?appid=716027609&daid=383&style=33&login_text=%E7%99%BB%E5%BD%95&hide_title_bar=1&hide_border=1&target=self&s_url=https%3A%2F%2Fgraph.qq.com%2Foauth2.0%2Flogin_jump&pt_3rd_aid=100497308&theme=2&verify_theme=',
+            }
+            resp = sess.get(url, timeout=15, headers=headers)
+            for c in sess.cookies:
+                if c.value: self.cookies[c.name] = c.value
+            qrsig = ''
+            for c in sess.cookies:
+                if c.name == 'qrsig': qrsig = c.value
+            if not qrsig:
+                m = re.search(r'qrsig=([^;]+)', resp.headers.get('Set-Cookie', ''))
+                if m:
+                    qrsig = m.group(1)
+                    self.cookies['qrsig'] = qrsig
+            if not qrsig:
+                return None
+            return {'qrsig': qrsig,
+                    'image': 'data:image/png;base64,' + base64.b64encode(resp.content).decode()}
+        except Exception as e:
+            self.logger.error(f"获取QQ二维码失败: {e}")
+            return None
+
+    def check_qr_login(self, qrsig: str):
+        ptqrtoken = self._hash33(qrsig)
+        ts = int(time.time() * 1000)
+        url = (f'https://xui.ptlogin2.qq.com/ssl/ptqrlogin'
+               f'?u1=https%3A%2F%2Fgraph.qq.com%2Foauth2.0%2Flogin_jump'
+               f'&ptqrtoken={ptqrtoken}&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052'
+               f'&action=0-0-{ts}&js_ver=26030415&js_type=1&login_sig=&pt_uistyle=40'
+               f'&aid=716027609&daid=383&pt_3rd_aid=100497308')
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 Chrome/149.0.0.0',
+                'Referer': 'https://xui.ptlogin2.qq.com/cgi-bin/xlogin?appid=716027609&daid=383&style=33&login_text=%E7%99%BB%E5%BD%95&hide_title_bar=1&hide_border=1&target=self&s_url=https%3A%2F%2Fgraph.qq.com%2Foauth2.0%2Flogin_jump&pt_3rd_aid=100497308&theme=2&verify_theme=',
+            }
+            resp = requests.get(url, timeout=15, headers=headers, cookies=self.cookies)
+            resp.encoding = 'utf-8'
+            text = resp.text
+            m = re.search(r"ptuiCB\('(\d+)','(\d+)','([^']*)','([^']*)','([^']*)'", text)
+            if not m:
+                return (-1, '解析失败', {}, '')
+            code = int(m.group(1))
+            msg = m.group(5)
+            cb_url = m.group(3)
+            cookies = dict(self.cookies)
+            for c in resp.cookies:
+                if c.value: cookies[c.name] = c.value
+            return (code, msg, cookies, cb_url)
+        except Exception as e:
+            self.logger.error(f"检查QQ登录状态失败: {e}")
+            return (-1, str(e), {}, '')
+
+    def exchange_callback(self, callback_url: str) -> Dict[str, str]:
+        try:
+            sess = requests.Session()
+            sess.cookies.update(self.cookies)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 Chrome/149.0.0.0',
+                'Referer': 'https://xui.ptlogin2.qq.com/',
+            }
+            sess.get(callback_url, timeout=15, allow_redirects=True, headers=headers)
+            result = {}
+            for c in sess.cookies:
+                if c.value: result[c.name] = c.value
+            return result
+        except Exception as e:
+            self.logger.error(f"交换QQ回调失败: {e}")
+            return {}
 
 
 _module_api = QQMusicAPI()

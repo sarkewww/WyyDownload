@@ -1262,10 +1262,66 @@ def _qq_get_cookies():
         api_service.logger.warning(f"获取QQ Cookie失败: {e}")
         return {}
 
+def _qq_prepare():
+    cookies = _qq_get_cookies()
+    cookies.pop('qrsig', None)
+    qq_api.set_cookies('; '.join(f'{k}={v}' for k, v in cookies.items()) if cookies else '')
+    return cookies
+
 
 @app.route('/qq')
 def qq_index():
     return render_template('qq.html')
+
+
+@app.route('/qq/qr-login/start', methods=['POST'])
+def qq_qr_login_start():
+    try:
+        qq_api.cookies = {}
+        result = qq_api.get_qr_code()
+        if not result:
+            return APIResponse.error("生成二维码失败", 500)
+        return APIResponse.success({
+            'qrsig': result['qrsig'],
+            'qr_image': result['image'],
+        }, "二维码已生成")
+    except Exception as e:
+        return APIResponse.error(f"生成失败: {str(e)}", 500)
+
+
+@app.route('/qq/qr-login/check/<qrsig>', methods=['GET'])
+def qq_qr_login_check(qrsig: str):
+    try:
+        ret = qq_api.check_qr_login(qrsig)
+        if not isinstance(ret, tuple) or len(ret) < 3:
+            return APIResponse.error("检查登录失败", 500)
+        code, msg, cookies = ret[0], ret[1], ret[2]
+        callback_url = ret[3] if len(ret) > 3 and ret[3] else ''
+
+        if code == 0:
+            final_cookies = dict(cookies)
+            if callback_url:
+                oauth = qq_api.exchange_callback(callback_url)
+                final_cookies.update(oauth)
+            final_cookies.pop('qrsig', None)
+            cookie_str = '; '.join(f'{k}={v}' for k, v in final_cookies.items() if v)
+            if cookie_str:
+                try:
+                    qq_cookie_mgr.write_cookie(cookie_str)
+                    api_service.logger.info("QQ扫码登录成功，Cookie已保存")
+                except Exception as e:
+                    api_service.logger.error(f"保存QQ Cookie失败: {e}")
+            return APIResponse.success({'code': code, 'status': '登录成功', 'cookie': cookie_str})
+        elif code == 66:
+            return APIResponse.success({'code': code, 'status': '等待扫码'})
+        elif code == 67:
+            return APIResponse.success({'code': code, 'status': '扫码成功，请在手机上确认'})
+        elif code == 65:
+            return APIResponse.success({'code': code, 'status': '二维码已过期'})
+        else:
+            return APIResponse.success({'code': code, 'status': msg or f'状态码: {code}'})
+    except Exception as e:
+        return APIResponse.error(f"检查登录状态失败: {str(e)}", 500)
 
 
 @app.route('/qq/health', methods=['GET'])

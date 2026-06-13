@@ -31,8 +31,10 @@ class CookieManager:
         },
         'qq': {
             'default_file': 'qqcookie.txt',
-            'important': {'uin', 'skey'},
-            'optional': {'p_uin', 'p_skey', 'pt4_token', 'p_luin', 'p_lskey'},
+            'important': {'p_uin', 'p_skey'},
+            'optional': {'uin', 'skey', 'pt4_token', 'pt2gguin', 'pt_oauth_token',
+                         'superuin', 'supertoken', 'superkey', 'pt_login_type',
+                         'pt_recent_uins', 'ptcz', 'RK'},
         },
     }
 

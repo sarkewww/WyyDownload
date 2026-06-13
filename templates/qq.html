@@ -90,6 +90,7 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
 <div class="cookie-bar">
     <div class="dot dot-check" id="cookie-dot"></div>
     <span class="flex-grow-1"><span id="cookie-bar-text">检测Cookie...</span><span class="text-sm" style="margin-left:6px" id="cookie-bar-extra"></span></span>
+    <button class="btn btn-xs btn-outline-primary" id="qr-login-btn">扫码登录</button>
     <button class="btn btn-xs btn-outline-secondary" id="cookie-expand-btn">展开</button>
 </div>
 <div class="card d-none mb-3" id="cookie-editor">
@@ -189,6 +190,8 @@ a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-h)}
 
 <div class="modal fade" id="bigPicModal"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">封面</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-center"><img id="big-pic-img" src="" style="max-width:100%;max-height:65vh;border-radius:8px"></div></div></div></div>
 
+<div class="modal fade" id="qrLoginModal"><div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">QQ扫码登录</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-center"><div id="qr-loading" class="py-4"><div class="spinner-border text-primary" style="width:3rem;height:3rem"></div><p class="mt-2 text-sm" style="color:var(--muted)">生成中...</p></div><img id="qr-code-img" src="" style="max-width:220px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1);display:none"><div id="qr-status" class="mt-2 text-sm" style="color:var(--muted)"></div></div></div></div></div>
+
 <script src="/static/jquery.min.js"></script>
 <script src="/static/aplayer.min.js"></script>
 <script src="/static/bootstrap.bundle.min.js"></script>
@@ -217,6 +220,10 @@ function loadCookie(){$.get(API+'/cookie',function(r){if(r.status===200){var d=r
 loadCookie();$('#cookie-expand-btn').on('click',function(){$('#cookie-editor').toggleClass('d-none')});
 $('#cookie-save-btn').on('click',function(){var v=$('#cookie-text').val().trim();if(!v)return toast('请输入Cookie','error');$.post(API+'/cookie',{cookie:v},function(r){if(r.status===200){toast('Cookie已保存','success');$('#cookie-editor').addClass('d-none');loadCookie()}else toast(r.message||'保存失败','error')}).fail(function(){toast('请求失败','error')})});
 $('#cookie-refresh-btn').on('click',function(){loadCookie();toast('已刷新','info')});
+
+var qrTimer=null,qrRefresh=null;function stopQr(){if(qrTimer){clearInterval(qrTimer);qrTimer=null}if(qrRefresh){clearTimeout(qrRefresh);qrRefresh=null}}$('#qrLoginModal').on('hidden.bs.modal',stopQr);
+function startQrLogin(){$('#qr-loading').show();$('#qr-code-img').hide();$('#qr-status').text('');new bootstrap.Modal('#qrLoginModal').show();stopQr();$.post(API+'/qr-login/start',function(r){if(r.status===200&&r.data&&r.data.qr_image){$('#qr-loading').hide();$('#qr-code-img').attr('src',r.data.qr_image).show();var qrsig=r.data.qrsig;$('#qr-status').text('请用QQ手机版扫码').css('color','var(--muted)');qrTimer=setInterval(function(){$.get(API+'/qr-login/check/'+qrsig,function(c){if(c.status===200&&c.data){var cd=c.data.code;if(cd===0){stopQr();$('#qr-status').text('登录成功！').css('color','var(--green)');loadCookie();toast('扫码登录成功','success');setTimeout(function(){bootstrap.Modal.getInstance('#qrLoginModal').hide()},1200)}else if(cd===67){$('#qr-status').text('已扫码，请确认').css('color','var(--orange)')}else if(cd===65){$('#qr-status').text('二维码已过期，自动刷新...').css('color','var(--orange)');stopQr();qrRefresh=setTimeout(startQrLogin,1500)}else if(cd===66){$('#qr-status').text('等待扫码...').css('color','var(--muted)')}else{$('#qr-status').text(c.data.status||'失败').css('color','var(--red)')}}}).fail(function(){stopQr();$('#qr-status').text('检查失败').css('color','var(--red)')})},2000)}else{toast('生成失败','error');bootstrap.Modal.getInstance('#qrLoginModal').hide()}}).fail(function(){toast('请求失败','error');bootstrap.Modal.getInstance('#qrLoginModal').hide()})}
+$('#qr-login-btn').on('click',startQrLogin);
 
 $('#parse-btn').on('click',function(){var id=$('#song_ids').val(),lv=$('#level').val();if(!id)return toast('请输入songmid或链接','error');$.post(API+'/song',{id:id,level:lv,type:'json'},function(d){if(d.status===200){$('#song_name').text(d.data.name);$('#artist_names').text(d.data.ar_name);$('#song_alname').text(d.data.al_name);$('#song_level').text(d.data.level);$('#song_size').text(d.data.size);currentLyric=d.data.lyric||'';currentTLyric=d.data.tlyric||'';currentLyricMode='orig';$('.lyric-mode-btn').removeClass('active');$('.lyric-mode-btn[data-mode=orig]').addClass('active');updateLyricDisplay();$('#song_url').attr('href',d.data.url).text(d.data.url?'点击下载':'无链接');$('#song-info').removeClass('d-none').data('song-id',d.data.id);$('#show-big-pic').data('pic',d.data.pic);if(ap){ap.destroy()}ap=new APlayer({container:document.getElementById('aplayer'),lrcType:1,audio:[{name:d.data.name,artist:d.data.ar_name,url:d.data.url,cover:d.data.pic,lrc:lrctran(currentLyric,currentTLyric)}]})}else toast(d.message||'解析失败','error')},'json')});
 function updateLyricDisplay(){var t='';if(currentLyricMode==='orig')t=currentLyric;else if(currentLyricMode==='trans')t=currentTLyric||'(无翻译)';else t=currentTLyric?lrctran(currentLyric,currentTLyric):currentLyric;$('#lyric').html((t||'(无歌词)').replace(/\n/g,'<br>'))}
