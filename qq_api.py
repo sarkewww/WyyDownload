@@ -220,6 +220,17 @@ class QQMusic:
             print(f'获取歌词失败: {e}')
             return {'error': '无法获取歌词'}
 
+    def get_album_detail(self, albummid):
+        url = 'https://c.y.qq.com/v8/fcg-bin/fcg_v8_album_info_cp.fcg'
+        params = {'albummid': albummid, 'format': 'json'}
+        try:
+            resp = requests.get(url, params=params, headers=self.headers, timeout=15, verify=False)
+            resp.encoding = 'utf-8'
+            return resp.json()
+        except Exception as e:
+            print(f'获取专辑详情失败: {e}')
+            return {'code': -1, 'data': {}}
+
     def get_playlist_detail(self, dissid, num=50, page=1):
         url = 'https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg'
         params = {

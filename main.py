@@ -582,6 +582,9 @@ def get_playlist():
         validation_error = api_service._validate_request_params({'playlist_id': playlist_id})
         if validation_error:
             return validation_error
+
+        if 'y.qq.com' in str(playlist_id):
+            return APIResponse.error("检测到 QQ 音乐链接，请切换到 <a href='/qq'>QQ音乐工具箱</a>", 400)
         
         cookies = api_service._get_cookies()
         result = playlist_detail(playlist_id, cookies)
@@ -1007,6 +1010,9 @@ def get_album():
 
         if 'playlist' in str(album_id):
             return APIResponse.error("检测到歌单链接，请切换到「歌单」Tab 查询", 400)
+
+        if 'y.qq.com' in str(album_id):
+            return APIResponse.error("检测到 QQ 音乐链接，请切换到 <a href='/qq'>QQ音乐工具箱</a>", 400)
 
         cookies = api_service._get_cookies()
         result = album_detail(album_id, cookies)
@@ -1748,6 +1754,139 @@ def qq_playlist_detail():
         return APIResponse.error(f"获取失败: {str(e)}", 500)
 
 
+@app.route('/qq/album', methods=['GET', 'POST'])
+def qq_album_detail():
+    try:
+        data = api_service._safe_get_request_data()
+        aid = data.get('id', '').strip()
+        if not aid:
+            return APIResponse.error("必须提供专辑ID或链接")
+
+        import re
+        m = re.search(r'albumDetail/(\w+)', aid)
+        if m:
+            aid = m.group(1)
+
+        raw = qq_api.get_album_detail(aid)
+        if raw.get('code') != 0:
+            return APIResponse.error('获取专辑失败', 404)
+
+        info = raw.get('data', {})
+        songs = []
+        for s in info.get('list', []):
+            singers = '/'.join(sg.get('name', '') for sg in s.get('singer', []))
+            songs.append({
+                'id': s.get('songmid', ''),
+                'songid': s.get('songid', ''),
+                'name': s.get('songname', ''),
+                'artists': singers,
+                'album': info.get('name', ''),
+                'albummid': s.get('albummid', ''),
+                'picUrl': f"https://y.qq.com/music/photo_new/T002R300x300M000{info.get('mid', '')}.jpg",
+                'interval': s.get('interval', 0),
+            })
+
+        return APIResponse.success({
+            'album': {
+                'id': info.get('mid', aid),
+                'name': info.get('name', ''),
+                'artist': info.get('singername', ''),
+                'coverImgUrl': f"https://y.qq.com/music/photo_new/T002R300x300M000{info.get('mid', '')}.jpg",
+                'desc': info.get('desc', ''),
+                'company': info.get('company', ''),
+                'aDate': info.get('aDate', ''),
+                'songCount': info.get('cur_song_num', len(songs)),
+            },
+            'songs': songs,
+        }, '获取专辑成功')
+    except Exception as e:
+        api_service.logger.error(f"QQ专辑详情异常: {e}")
+        return APIResponse.error(f"获取失败: {str(e)}", 500)
+
+
+@app.route('/qq/album/batch', methods=['GET', 'POST'])
+def qq_album_batch():
+    try:
+        data = api_service._safe_get_request_data()
+        aid = data.get('id', '').strip()
+        level = data.get('level', 'flac')
+        if not aid:
+            return APIResponse.error("必须提供专辑ID或链接")
+
+        import re
+        m = re.search(r'albumDetail/(\w+)', aid)
+        if m:
+            aid = m.group(1)
+
+        if level not in QQ_VALID_LEVELS:
+            return APIResponse.error("无效的音质参数")
+
+        raw = qq_api.get_album_detail(aid)
+        if raw.get('code') != 0:
+            return APIResponse.error('获取专辑失败', 404)
+
+        info = raw.get('data', {})
+        songlist = info.get('list', [])
+        total = len(songlist)
+        resolved = 0
+        tracks = [None] * total
+
+        _qq_prepare()
+
+        mids_to_resolve = []
+        for i, s in enumerate(songlist):
+            singers = '/'.join(sg.get('name', '') for sg in s.get('singer', []))
+            songmid = s.get('songmid', '')
+            pay = s.get('pay', {}) or {}
+            track = {
+                'id': songmid,
+                'songid': s.get('songid', ''),
+                'name': s.get('songname', ''),
+                'artists': singers,
+                'album': info.get('name', ''),
+                'picUrl': f"https://y.qq.com/music/photo_new/T002R300x300M000{info.get('mid', '')}.jpg",
+                'interval': s.get('interval', 0),
+                'duration': (s.get('interval', 0) or 0) * 1000,
+                'url': '', 'level': level, 'quality_name': '获取失败',
+                'degraded': False, 'ext': '', 'size': 0, 'size_formatted': '-', 'br': 0,
+                'payplay': pay.get('payplay', 0),
+            }
+            tracks[i] = track
+            if songmid:
+                mids_to_resolve.append((i, songmid))
+
+        with ThreadPoolExecutor(max_workers=min(8, len(mids_to_resolve))) as executor:
+            f2idx = {executor.submit(_degrade_qq_quality, mid, level): idx for idx, mid in mids_to_resolve}
+            for future in as_completed(f2idx):
+                idx = f2idx[future]
+                try:
+                    url_result, actual_level, degraded = future.result()
+                    if url_result and url_result.get('url'):
+                        ext = qq_api.file_config.get(actual_level, {}).get('e', '.mp3')
+                        tracks[idx].update({
+                            'url': url_result['url'],
+                            'level': actual_level,
+                            'quality_name': _qq_get_quality_cn(actual_level),
+                            'degraded': degraded,
+                            'ext': ext,
+                        })
+                        resolved += 1
+                except Exception:
+                    pass
+
+        result_info = {
+            'id': info.get('mid', aid),
+            'name': info.get('name', ''),
+            'artist': info.get('singername', ''),
+            'coverImgUrl': f"https://y.qq.com/music/photo_new/T002R300x300M000{info.get('mid', '')}.jpg",
+            'trackCount': info.get('cur_song_num', total),
+        }
+        return APIResponse.success({'album': result_info, 'tracks': tracks, 'resolved': resolved, 'total': total}, '批量解析完成')
+    except Exception as e:
+        api_service.logger.error(f"QQ专辑批量解析异常: {e}")
+        return APIResponse.error(f"批量解析失败: {str(e)}", 500)
+
+
 @app.route('/qq/download', methods=['GET', 'POST'])
 def qq_download_music_api():
     try:
@@ -1796,13 +1935,21 @@ def qq_download_music_api():
 
         if not file_path.exists():
             try:
-                download_result = qq_downloader.download_music_file(
-                    music_id, actual_quality, cookies=_qq_get_cookies()
-                )
-                if not download_result.success:
-                    return APIResponse.error(f"下载失败: {download_result.error_message}", 500)
-                file_path = Path(download_result.file_path)
-            except DownloadException as e:
+                dl_url = music_info['download_url']
+                api_service.logger.info(f"QQ下载: {filename} <- {dl_url[:60]}...")
+                resp = requests.get(dl_url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }, timeout=300, stream=True, verify=False)
+                resp.raise_for_status()
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(file_path, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                api_service.logger.info(f"QQ下载完成: {filename}")
+                db.add_qq_download(music_info['name'], music_id, actual_quality)
+            except Exception as e:
+                api_service.logger.error(f"QQ下载失败: {e}")
                 return APIResponse.error(f"下载失败: {str(e)}", 500)
 
         return_format = data.get('format', 'file')
